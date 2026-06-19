@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 import json
 from pathlib import Path
@@ -40,8 +41,31 @@ def uninstall_hooks() -> tuple[Path, Path | None]:
 
 
 def _copy_hook_writer() -> None:
-    source = Path(__file__).with_name('hook_writer.py')
+    source = _find_hook_writer_source()
+    if source is None:
+        searched = '\n'.join(str(path) for path in _hook_writer_source_candidates())
+        raise FileNotFoundError(
+            '找不到 hook_writer.py。'
+            '如果正在运行打包版 exe，请用项目根目录的 codex_status_widget.spec 重新打包。\n'
+            f'已检查：\n{searched}'
+        )
+    HOOK_WRITER_PATH.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, HOOK_WRITER_PATH)
+
+
+def _find_hook_writer_source() -> Path | None:
+    for path in _hook_writer_source_candidates():
+        if path.exists():
+            return path
+    return None
+
+
+def _hook_writer_source_candidates() -> Iterable[Path]:
+    yield Path(__file__).with_name('hook_writer.py')
+
+    bundle_dir = getattr(sys, '_MEIPASS', None)
+    if bundle_dir:
+        yield Path(bundle_dir) / 'codex_widget' / 'hook_writer.py'
 
 
 def _merge_hooks_json() -> Path | None:

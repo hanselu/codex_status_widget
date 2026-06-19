@@ -87,6 +87,14 @@ uv run python main.py --once
 uv run python main.py
 ```
 
+## 打包 exe
+
+```powershell
+uv run --with pyinstaller pyinstaller --noconfirm codex_status_widget.spec
+```
+
+必须使用项目根目录的 `codex_status_widget.spec` 打包；它会把 `codex_widget\hook_writer.py` 一起打进 exe。否则打包版右键“添加钩子到 Codex”时无法复制 hook writer。
+
 ## 右键菜单
 
 - 刷新
