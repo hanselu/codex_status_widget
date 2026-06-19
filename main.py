@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from codex_widget.codex_app import codex_app_is_running
 from codex_widget.config import AppConfig
 from codex_widget.hook_installer import install_hooks, uninstall_hooks
 from codex_widget.snapshot import CodexSnapshotReader
@@ -16,6 +17,7 @@ def print_once() -> int:
         hook_stale_after_minutes=config.hook.stale_after_minutes,
         hook_max_events_to_read=config.hook.max_events_to_read,
         fallback_working_window_seconds=config.status.working_window_seconds,
+        codex_app_running=codex_app_is_running,
     )
     snapshot = reader.read_snapshot()
 

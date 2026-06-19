@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 import time
@@ -17,6 +18,7 @@ class CodexSnapshotReader:
         hook_stale_after_minutes: int = 360,
         hook_max_events_to_read: int = 5000,
         fallback_working_window_seconds: int = 60,
+        codex_app_running: Callable[[], bool | None] | None = None,
     ) -> None:
         self.quota_reader = CodexQuotaReader(sessions_dir)
         self.hook_reader = HookStateReader(
@@ -25,14 +27,17 @@ class CodexSnapshotReader:
             max_events_to_read=hook_max_events_to_read,
         )
         self.fallback_working_window_seconds = fallback_working_window_seconds
+        self._codex_app_running = codex_app_running
 
     def read_snapshot(self) -> CodexSnapshot:
         now = datetime.now().astimezone()
         quota = self.quota_reader.read_quota()
         hook_signal = self.hook_reader.read_signal()
+        codex_app_running = self._read_codex_app_running()
 
-        status = self._resolve_status(quota, hook_signal, now)
-        notes = _split_notes([hook_signal.note, quota.note])
+        status = self._resolve_status(quota, hook_signal, now, codex_app_running)
+        app_note = 'Codex App 未运行' if codex_app_running is False else ''
+        notes = _split_notes([app_note, hook_signal.note, quota.note])
         note = '\n'.join(_dedupe_preserve_order(notes))
 
         return CodexSnapshot(
@@ -48,12 +53,23 @@ class CodexSnapshotReader:
             latest_file=quota.latest_file,
             quota_file=quota.quota_file,
             hook_signal=hook_signal,
+            codex_app_running=codex_app_running,
         )
 
     def mark_idle(self) -> None:
         self.hook_reader.mark_idle()
 
-    def _resolve_status(self, quota, hook_signal: HookSignal, now: datetime) -> StatusName:  # noqa: ANN001
+    def _read_codex_app_running(self) -> bool | None:
+        if self._codex_app_running is None:
+            return None
+        return self._codex_app_running()
+
+    def _resolve_status(  # noqa: ANN001
+        self, quota, hook_signal: HookSignal, now: datetime, codex_app_running: bool | None
+    ) -> StatusName:
+        if codex_app_running is False:
+            return 'offline'
+
         if (
             quota.has_limit_signal
             or quota_is_exhausted(quota.primary, now)
@@ -82,7 +98,8 @@ class CodexSnapshotReader:
         return {
             'idle': '闲置中',
             'working': '工作中',
-            'cooldown': '等待CD',
+            'cooldown': '无额度',
+            'offline': 'Codex 未运行',
         }[status]
 
 

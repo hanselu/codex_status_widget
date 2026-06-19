@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 
-StatusName = Literal['idle', 'working', 'cooldown']
+StatusName = Literal['idle', 'working', 'cooldown', 'offline']
 HookSignalName = Literal['idle', 'working', 'unknown']
 
 
@@ -61,3 +61,4 @@ class CodexSnapshot:
     latest_file: Path | None = None
     quota_file: Path | None = None
     hook_signal: HookSignal = field(default_factory=HookSignal)
+    codex_app_running: bool | None = None

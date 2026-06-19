@@ -8,12 +8,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QMessageBox,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
 from .config import CONFIG_DIR, AppConfig
+from .codex_app import codex_app_is_running
+from .hook_installer import install_hooks
 from .models import CodexSnapshot, StatusName
 from .snapshot import CodexSnapshotReader
 
@@ -22,6 +25,7 @@ STATUS_COLORS: dict[StatusName, str] = {
     'idle': '#31c46b',
     'working': '#f4c542',
     'cooldown': '#ff5a5f',
+    'offline': '#ff5a5f',
 }
 
 MIN_WIDGET_HEIGHT = 86
@@ -37,6 +41,7 @@ class CodexWidget(QWidget):
             hook_stale_after_minutes=self.config.hook.stale_after_minutes,
             hook_max_events_to_read=self.config.hook.max_events_to_read,
             fallback_working_window_seconds=self.config.status.working_window_seconds,
+            codex_app_running=codex_app_is_running,
         )
         self._drag_offset: QPoint | None = None
         self._last_snapshot: CodexSnapshot | None = None
@@ -134,6 +139,10 @@ class CodexWidget(QWidget):
         self.lock_action.triggered.connect(self.toggle_lock)
         self.menu.addAction(self.lock_action)
 
+        self.install_hook_action = QAction('添加钩子到 Codex', self)
+        self.install_hook_action.triggered.connect(self.install_hook_to_codex)
+        self.menu.addAction(self.install_hook_action)
+
         self.open_sessions_action = QAction('打开 sessions 目录', self)
         self.open_sessions_action.triggered.connect(self.open_sessions_dir)
         self.menu.addAction(self.open_sessions_action)
@@ -222,6 +231,27 @@ class CodexWidget(QWidget):
         self.config.ui.locked = not self.config.ui.locked
         self.config.save()
         self.lock_action.setText(self._lock_text())
+
+    def install_hook_to_codex(self) -> None:
+        try:
+            writer_path, hooks_path, backup_path = install_hooks()
+        except Exception as exc:
+            QMessageBox.critical(self, '添加钩子失败', str(exc))
+            return
+
+        message = f'已安装 hook writer：{writer_path}\n已更新 Codex hooks：{hooks_path}'
+        if backup_path:
+            message += f'\n已备份原 hooks.json：{backup_path}'
+        message += '\n\n下一步：在 Codex 里打开 /hooks，review/trust 新 hook。'
+
+        self.tray.showMessage(
+            'Codex 状态',
+            '已添加钩子到 Codex；请在 /hooks 中 trust 新 hook。',
+            QSystemTrayIcon.MessageIcon.Information,
+            8000,
+        )
+        QMessageBox.information(self, '已添加钩子到 Codex', message)
+        self.refresh()
 
     def open_sessions_dir(self) -> None:
         path = self.config.codex.sessions_dir

@@ -15,9 +15,9 @@ Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的三色�
 |---|---|---|
 | 绿色 | 闲置 | Hook 收到 `Stop`，或没有工作中的 turn |
 | 黄色 | 正在干活 | Hook 收到 `UserPromptSubmit`，且还没收到 `Stop` |
-| 红色 | 等 CD | 额度达到 100% 且重置时间仍在未来，或检测到明确 cooldown / quota / rate limit 错误 |
+| 红色 | 无额度 / Codex 未运行 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 Codex App 进程未运行 |
 
-额度文本不参与状态灯显示。
+除“无额度”会触发红灯外，额度百分比不影响黄/绿工作状态。
 
 ## 安装依赖
 
@@ -92,11 +92,14 @@ uv run python main.py
 - 刷新
 - 标记为闲置
 - 锁定位置 / 解锁位置
+- 添加钩子到 Codex
 - 打开 sessions 目录
 - 打开状态目录
 - 退出
 
 `标记为闲置` 用于 Codex 崩溃、Hook 没有收到 `Stop`、或者你手动想把黄灯重置为绿灯的情况。
+
+`添加钩子到 Codex` 会复制 hook writer 并合并更新 `%USERPROFILE%\.codex\hooks.json`。添加后仍需要在 Codex 里打开 `/hooks` 并 review / trust 新 hook。
 
 ## 卸载 Hook
 
