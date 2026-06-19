@@ -1,0 +1,17 @@
+[project]
+name = "codex-status-widget"
+version = "0.2.0"
+description = "Codex Desktop status and quota widget for Windows"
+requires-python = ">=3.11"
+dependencies = [
+  "PySide6>=6.7",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
