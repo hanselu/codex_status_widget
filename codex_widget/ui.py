@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QMouseEvent, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QFontMetrics, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -29,6 +29,21 @@ STATUS_COLORS: dict[StatusName, str] = {
 }
 
 MIN_WIDGET_HEIGHT = 86
+HOOK_EVENT_LABELS = {
+    'UserPromptSubmit': '提交提示词',
+    'Stop': '响应结束',
+    'TaskComplete': '任务完成',
+    'UserPromptSubmitExpired': '提示词事件过期',
+    'SessionStart': '会话开始',
+    'PreToolUse': '工具调用前',
+    'PostToolUse': '工具调用后',
+    'PermissionRequest': '权限请求',
+    'SubagentStart': '子任务开始',
+    'SubagentStop': '子任务结束',
+    'PreCompact': '压缩前',
+    'PostCompact': '压缩后',
+    'WidgetManualIdle': '手动标记闲置',
+}
 
 
 class CodexWidget(QWidget):
@@ -45,6 +60,7 @@ class CodexWidget(QWidget):
         )
         self._drag_offset: QPoint | None = None
         self._last_snapshot: CodexSnapshot | None = None
+        self._note_display_text = ''
 
         self._build_window()
         self._build_ui()
@@ -118,7 +134,7 @@ class CodexWidget(QWidget):
         self.secondary_label = QLabel('周额度：未读取', self.card)
         self.note_label = QLabel('', self.card)
         self.note_label.setObjectName('noteLabel')
-        self.note_label.setWordWrap(True)
+        self.note_label.setWordWrap(False)
 
         layout.addWidget(self.primary_label)
         layout.addWidget(self.secondary_label)
@@ -176,7 +192,9 @@ class CodexWidget(QWidget):
         self.title_label.setText(snapshot.status_text)
         self.primary_label.setText(snapshot.primary_text)
         self.secondary_label.setText(snapshot.secondary_text)
-        self.note_label.setText(snapshot.note)
+        self._note_display_text = _format_display_note(snapshot.note)
+        self.note_label.setText(self._note_display_text)
+        self.note_label.setToolTip(snapshot.note)
         self.note_label.setVisible(bool(snapshot.note))
         self._resize_to_content()
         self._set_tray_icon(snapshot.status)
@@ -202,9 +220,8 @@ class CodexWidget(QWidget):
 
         if self.note_label.isVisible():
             self.note_label.setFixedWidth(body_width)
-            note_height = self.note_label.heightForWidth(body_width)
-            if note_height < 0:
-                note_height = self.note_label.sizeHint().height()
+            self.note_label.setText(_elide_text(self.note_label, self._note_display_text, body_width))
+            note_height = self.note_label.sizeHint().height()
             line_count += 1
 
         content_height = (
@@ -347,3 +364,19 @@ def _make_dot_icon(color: str) -> QIcon:
     painter.drawEllipse(5, 5, 22, 22)
     painter.end()
     return QIcon(pixmap)
+
+
+def _format_display_note(note: str) -> str:
+    text = ' / '.join(part.strip() for part in note.splitlines() if part.strip())
+    text = (
+        text.replace('hook 工作中: ', '钩子：')
+        .replace('hook 闲置: ', '钩子：')
+        .replace('hook 工作状态已过期，视为闲置', '钩子状态已过期')
+    )
+    for event_name, label in sorted(HOOK_EVENT_LABELS.items(), key=lambda item: len(item[0]), reverse=True):
+        text = text.replace(event_name, label)
+    return text
+
+
+def _elide_text(label: QLabel, text: str, width: int) -> str:
+    return QFontMetrics(label.font()).elidedText(text, Qt.TextElideMode.ElideRight, max(1, width))
