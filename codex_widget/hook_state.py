@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .models import HookSignal
+from .models import HookSignal, HookSignalName
 
 
 WORKING_EVENTS = {
@@ -29,6 +29,10 @@ IDLE_EVENTS = {
     'WidgetManualIdle',
 }
 
+TRANSCRIPTLESS_STALE_AFTER_MINUTES = 10
+MAX_TRANSCRIPT_BYTES_TO_READ = 512 * 1024
+
+
 @dataclass(slots=True)
 class _SessionState:
     status: str = 'idle'
@@ -38,6 +42,8 @@ class _SessionState:
     turn_id: str = ''
     cwd: str = ''
     model: str = ''
+    transcript_path: str = ''
+    note: str = ''
 
 
 class HookStateReader:
@@ -66,6 +72,7 @@ class HookStateReader:
                     existing.status = 'idle'
                     existing.last_event_name = event_name
                     existing.last_event_at = _parse_datetime(event.get('recorded_at')) or existing.last_event_at
+                    existing.note = ''
                 session_id = '__global__'
             else:
                 session_id = _as_str(event.get('session_id')) or '__global__'
@@ -74,6 +81,9 @@ class HookStateReader:
             self._apply_event(state, event)
 
         now = datetime.now(timezone.utc)
+        self._apply_transcript_completion(sessions)
+        _expire_transcriptless_working_states(sessions, now)
+
         stale_cutoff = now - timedelta(minutes=self.stale_after_minutes)
 
         working_states = [
@@ -85,17 +95,7 @@ class HookStateReader:
         ]
         if working_states:
             state = max(working_states, key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc))
-            return HookSignal(
-                status='working',
-                last_event_name=state.last_event_name,
-                last_event_at=state.last_event_at,
-                session_id=state.session_id if state.session_id != '__global__' else '',
-                turn_id=state.turn_id,
-                cwd=state.cwd,
-                model=state.model,
-                note=_format_note('hook 工作中', state.last_event_name, state.last_event_at),
-                events_path=self.events_path,
-            )
+            return _signal_from_state('working', state, 'hook 工作中', self.events_path)
 
         # If there is a working state but it is stale, treat as idle and say why.
         stale_working_states = [state for state in sessions.values() if state.status == 'working']
@@ -115,6 +115,11 @@ class HookStateReader:
                 note='hook 工作状态已过期，视为闲置',
                 events_path=self.events_path,
             )
+
+        latest_states = [state for state in sessions.values() if state.last_event_at is not None]
+        if latest_states:
+            state = max(latest_states, key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc))
+            return _signal_from_state('idle', state, 'hook 闲置', self.events_path)
 
         if last_event is None:
             return HookSignal(status='unknown', note='未读取到 hook 事件', events_path=self.events_path)
@@ -189,18 +194,110 @@ class HookStateReader:
         state.turn_id = _as_str(event.get('turn_id')) or state.turn_id
         state.cwd = _as_str(event.get('cwd')) or state.cwd
         state.model = _as_str(event.get('model')) or state.model
+        state.transcript_path = _as_str(event.get('transcript_path')) or state.transcript_path
 
         if event_name in WORKING_EVENTS:
             state.status = 'working'
+            state.note = ''
             return
         if event_name in IDLE_EVENTS:
             # WidgetManualIdle is global and should force all known states idle.
             state.status = 'idle'
+            state.note = ''
             return
         if event_name in NEUTRAL_EVENTS:
             if state.status != 'working':
                 state.status = 'idle'
             return
+
+    def _apply_transcript_completion(self, sessions: dict[str, _SessionState]) -> None:
+        for state in sessions.values():
+            if state.status != 'working' or not state.transcript_path or not state.turn_id:
+                continue
+            completed_at = _read_task_completed_at(Path(state.transcript_path), state.turn_id)
+            if completed_at is None:
+                continue
+            state.status = 'idle'
+            state.last_event_name = 'TaskComplete'
+            state.last_event_at = completed_at
+            state.note = 'transcript 已记录完成，视为闲置'
+
+
+def _signal_from_state(
+    status: HookSignalName, state: _SessionState, note_prefix: str, events_path: Path
+) -> HookSignal:
+    note = state.note or _format_note(note_prefix, state.last_event_name, state.last_event_at)
+    return HookSignal(
+        status=status,
+        last_event_name=state.last_event_name,
+        last_event_at=state.last_event_at,
+        session_id=state.session_id if state.session_id != '__global__' else '',
+        turn_id=state.turn_id,
+        cwd=state.cwd,
+        model=state.model,
+        note=note,
+        events_path=events_path,
+    )
+
+
+def _expire_transcriptless_working_states(sessions: dict[str, _SessionState], now: datetime) -> None:
+    cutoff = now - timedelta(minutes=TRANSCRIPTLESS_STALE_AFTER_MINUTES)
+    for state in sessions.values():
+        if (
+            state.status == 'working'
+            and not state.transcript_path
+            and state.last_event_at is not None
+            and state.last_event_at < cutoff
+        ):
+            state.status = 'idle'
+            state.last_event_name = 'UserPromptSubmitExpired'
+            state.note = '无 transcript 的 hook 工作状态已过期，视为闲置'
+
+
+def _read_task_completed_at(transcript_path: Path, turn_id: str) -> datetime | None:
+    try:
+        lines = _read_recent_transcript_lines(transcript_path.expanduser())
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        payload = event.get('payload')
+        if not isinstance(payload, dict):
+            continue
+        if event.get('type') != 'event_msg' or payload.get('type') != 'task_complete':
+            continue
+        if _as_str(payload.get('turn_id')) != turn_id:
+            continue
+        completed_at = _datetime_from_unix_seconds(payload.get('completed_at'))
+        return completed_at or _parse_datetime(event.get('timestamp'))
+    return None
+
+
+def _read_recent_transcript_lines(transcript_path: Path) -> list[str]:
+    with transcript_path.open('rb') as f:
+        f.seek(0, 2)
+        file_size = f.tell()
+        start = max(0, file_size - MAX_TRANSCRIPT_BYTES_TO_READ)
+        f.seek(start)
+        if start:
+            f.readline()
+        return [line.decode('utf-8', errors='replace') for line in f]
+
+
+def _datetime_from_unix_seconds(value: Any) -> datetime | None:
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def _format_note(prefix: str, event_name: str, event_at: datetime | None) -> str:

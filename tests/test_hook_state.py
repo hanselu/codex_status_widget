@@ -22,6 +22,25 @@ def _append(path: Path, **kwargs) -> None:
         f.write(json.dumps(event) + '\n')
 
 
+def _write_task_complete(transcript: Path, turn_id: str, completed_at: datetime | None = None) -> None:
+    completed_at = completed_at or datetime.now(timezone.utc)
+    transcript.write_text(
+        json.dumps(
+            {
+                'timestamp': completed_at.isoformat(),
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'task_complete',
+                    'turn_id': turn_id,
+                    'completed_at': int(completed_at.timestamp()),
+                },
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+
 def test_user_prompt_submit_sets_working(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit')
@@ -77,8 +96,15 @@ def test_tool_events_do_not_replace_working_lifecycle_event(tmp_path: Path) -> N
 
 def test_long_thinking_stays_working_until_stale_cutoff(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
+    transcript = tmp_path / 'rollout.jsonl'
+    transcript.write_text('', encoding='utf-8')
     old = datetime.now(timezone.utc) - timedelta(minutes=20)
-    _append(events, hook_event_name='UserPromptSubmit', recorded_at=old.isoformat())
+    _append(
+        events,
+        hook_event_name='UserPromptSubmit',
+        recorded_at=old.isoformat(),
+        transcript_path=str(transcript),
+    )
 
     signal = HookStateReader(events, stale_after_minutes=360).read_signal()
     assert signal.status == 'working'
@@ -86,6 +112,45 @@ def test_long_thinking_stays_working_until_stale_cutoff(tmp_path: Path) -> None:
     stale_signal = HookStateReader(events, stale_after_minutes=5).read_signal()
     assert stale_signal.status == 'idle'
     assert '过期' in stale_signal.note
+
+
+def test_transcript_task_complete_sets_idle_without_stop(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    transcript = tmp_path / 'rollout.jsonl'
+    completed_at = datetime.now(timezone.utc)
+    _write_task_complete(transcript, 't1', completed_at)
+    _append(events, hook_event_name='UserPromptSubmit', transcript_path=str(transcript))
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'idle'
+    assert signal.last_event_name == 'TaskComplete'
+    assert signal.last_event_at == completed_at.replace(microsecond=0)
+    assert 'transcript' in signal.note
+
+
+def test_transcript_completion_for_other_turn_stays_working(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    transcript = tmp_path / 'rollout.jsonl'
+    _write_task_complete(transcript, 'other-turn')
+    _append(events, hook_event_name='UserPromptSubmit', transcript_path=str(transcript))
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'working'
+    assert signal.last_event_name == 'UserPromptSubmit'
+
+
+def test_transcriptless_working_expires_quickly(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    old = datetime.now(timezone.utc) - timedelta(minutes=11)
+    _append(events, hook_event_name='UserPromptSubmit', recorded_at=old.isoformat())
+
+    signal = HookStateReader(events, stale_after_minutes=360).read_signal()
+
+    assert signal.status == 'idle'
+    assert signal.last_event_name == 'UserPromptSubmitExpired'
+    assert '无 transcript' in signal.note
 
 
 def test_manual_idle_forces_idle(tmp_path: Path) -> None:

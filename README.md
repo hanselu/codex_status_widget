@@ -13,8 +13,8 @@ Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的三色�
 
 | 颜色 | 状态 | 规则 |
 |---|---|---|
-| 绿色 | 闲置 | Hook 收到 `Stop`，或没有工作中的 turn |
-| 黄色 | 正在干活 | Hook 收到 `UserPromptSubmit`，且还没收到 `Stop` |
+| 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有工作中的 turn |
+| 黄色 | 正在干活 | Hook 收到 `UserPromptSubmit`，且还没收到 `Stop` 或 transcript 完成记录 |
 | 红色 | 无额度 / Codex 未运行 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 Codex App 进程未运行 |
 
 除“无额度”会触发红灯外，额度百分比不影响黄/绿工作状态。
@@ -159,7 +159,8 @@ refresh_interval_seconds = 5
 
 - 只安装 `UserPromptSubmit` 和 `Stop` 两个 Hook，避免工具调用事件频繁写入状态文件。
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
-- `stale_after_minutes` 是 Hook 没收到 `Stop` 时的兜底过期时间，默认 360 分钟。
+- `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
+- 没有 `transcript_path` 的 working 事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 Codex App 的孤儿事件长期保持黄灯。
 - `working_window_seconds` 只在 Hook 没安装或没被 trust 时作为回退判断使用。
 
 ## 文件说明
