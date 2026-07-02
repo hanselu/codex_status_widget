@@ -44,6 +44,9 @@ MESSAGE_KEYS = {
 }
 
 LOG_ROWS_TO_SCAN = 2000
+# Codex writes separate token_count pools. The desktop quota widget should show
+# the general Codex pool, not model-specific pools such as Codex-Spark.
+PREFERRED_LIMIT_ID = 'codex'
 
 
 class CodexQuotaReader:
@@ -118,13 +121,16 @@ class CodexQuotaReader:
         if _file_is_older_than(latest_file, auth_mtime):
             return None, None, '未读取到当前账号 token_count'
 
-        latest_event = self._find_latest_token_count(latest_file)
+        latest_event = self._find_latest_token_count(latest_file, preferred_only=True)
         if latest_event is not None:
             self._last_quota_event = latest_event
             self._last_quota_file = latest_file
             return latest_event, latest_file, ''
 
+        latest_any_event = self._find_latest_token_count(latest_file, preferred_only=False)
         skipped_pre_auth_session = False
+        fallback_event: dict[str, Any] | None = latest_any_event
+        fallback_file: Path | None = latest_file if latest_any_event is not None else None
         for path in self._find_latest_jsonl_files(limit=30):
             if path == latest_file:
                 continue
@@ -132,13 +138,23 @@ class CodexQuotaReader:
                 skipped_pre_auth_session = True
                 continue
 
-            event = self._find_latest_token_count(path)
+            event = self._find_latest_token_count(path, preferred_only=True)
             if event is None:
+                if fallback_event is None:
+                    any_event = self._find_latest_token_count(path, preferred_only=False)
+                    if any_event is not None:
+                        fallback_event = any_event
+                        fallback_file = path
                 continue
 
             self._last_quota_event = event
             self._last_quota_file = path
             return event, path, '额度来自最近记录'
+
+        if fallback_event is not None:
+            self._last_quota_event = fallback_event
+            self._last_quota_file = fallback_file
+            return fallback_event, fallback_file, '未读取到主额度，显示其他额度池'
 
         if self._last_quota_event is not None:
             if _file_is_older_than(self._last_quota_file, auth_mtime):
@@ -184,12 +200,14 @@ class CodexQuotaReader:
             codex_home / 'logs_2.sqlite',
         ]
 
-    def _find_latest_token_count(self, path: Path) -> dict[str, Any] | None:
+    def _find_latest_token_count(self, path: Path, *, preferred_only: bool) -> dict[str, Any] | None:
         for line in _iter_lines_reversed(path, max_lines=2000):
             event = _loads_json_line(line)
             if not isinstance(event, dict):
                 continue
             if _is_token_count_event(event):
+                if preferred_only and not _is_preferred_quota_event(event):
+                    continue
                 return event
         return None
 
@@ -380,6 +398,19 @@ def _extract_rate_limits(event: dict[str, Any] | None) -> dict[str, Any] | None:
     return rate_limits if isinstance(rate_limits, dict) else None
 
 
+def _quota_limit_id(event: dict[str, Any] | None) -> str:
+    rate_limits = _extract_rate_limits(event)
+    if rate_limits is None:
+        return ''
+    value = rate_limits.get('limit_id')
+    return value.strip() if isinstance(value, str) else ''
+
+
+def _is_preferred_quota_event(event: dict[str, Any]) -> bool:
+    limit_id = _quota_limit_id(event)
+    return limit_id in {'', PREFERRED_LIMIT_ID}
+
+
 def _rate_limit_reached(event: dict[str, Any] | None) -> bool:
     rate_limits = _extract_rate_limits(event)
     if rate_limits is None:
@@ -421,11 +452,14 @@ def _read_latest_logged_rate_limits(path: Path) -> tuple[dict[str, Any], float |
         rate_limits = event.get('rate_limits')
         if not isinstance(rate_limits, dict):
             continue
-        return {
+        quota_event = {
             'type': 'token_count',
             'rate_limits': rate_limits,
             '_quota_source': 'codex.rate_limits',
-        }, _as_float(row_ts)
+        }
+        result = quota_event, _as_float(row_ts)
+        if _is_preferred_quota_event(quota_event):
+            return result
 
     return None
 

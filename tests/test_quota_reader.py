@@ -31,6 +31,7 @@ def _token_count(
     secondary: float,
     resets_at: str | None = None,
     limit_name: str | None = None,
+    limit_id: str | None = None,
 ) -> dict:
     rate_limits = {
         'primary': {
@@ -46,6 +47,8 @@ def _token_count(
     }
     if limit_name is not None:
         rate_limits['limit_name'] = limit_name
+    if limit_id is not None:
+        rate_limits['limit_id'] = limit_id
 
     return {
         'payload': {
@@ -72,6 +75,40 @@ def test_falls_back_to_recent_old_session_when_latest_has_no_token_count(tmp_pat
     new = tmp_path / 'sessions' / 'new.jsonl'
     _write_jsonl(old, [_token_count(12, 34)])
     _write_jsonl(new, [{'payload': {'type': 'task_started'}}])
+    os.utime(old, (1000, 1000))
+    os.utime(new, (2000, 2000))
+
+    snap = CodexQuotaReader(tmp_path / 'sessions').read_quota()
+
+    assert snap.primary.used_percent == 12
+    assert snap.secondary.used_percent == 34
+    assert snap.note == '额度来自最近记录'
+    assert snap.latest_file == new
+    assert snap.quota_file == old
+
+
+def test_prefers_general_codex_limit_over_newer_spark_limit_in_same_session(tmp_path: Path) -> None:
+    path = tmp_path / 'sessions' / 'a.jsonl'
+    _write_jsonl(
+        path,
+        [
+            _token_count(12, 34, limit_id='codex'),
+            _token_count(0, 0, limit_id='codex_bengalfox'),
+        ],
+    )
+
+    snap = CodexQuotaReader(tmp_path / 'sessions').read_quota()
+
+    assert snap.primary.used_percent == 12
+    assert snap.secondary.used_percent == 34
+    assert snap.note == ''
+
+
+def test_prefers_recent_general_codex_limit_over_latest_spark_session(tmp_path: Path) -> None:
+    old = tmp_path / 'sessions' / 'old.jsonl'
+    new = tmp_path / 'sessions' / 'new.jsonl'
+    _write_jsonl(old, [_token_count(12, 34, limit_id='codex')])
+    _write_jsonl(new, [_token_count(0, 0, limit_id='codex_bengalfox')])
     os.utime(old, (1000, 1000))
     os.utime(new, (2000, 2000))
 
@@ -149,6 +186,38 @@ def test_reads_received_message_logged_rate_limits(tmp_path: Path) -> None:
     assert snap.quota_source == 'codex.rate_limits'
     assert snap.note == ''
     assert snap.quota_file == logs
+
+
+def test_ignores_spark_logged_rate_limits_when_session_has_general_limit(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'a.jsonl'
+    logs = codex_home / 'logs_2.sqlite'
+    _write_jsonl(session, [_token_count(12, 34, limit_id='codex')])
+    _write_logs_db(
+        logs,
+        [
+            'Received message '
+            + json.dumps(
+                {
+                    'type': 'codex.rate_limits',
+                    'rate_limits': {
+                        'allowed': True,
+                        'limit_reached': False,
+                        'limit_id': 'codex_bengalfox',
+                        'primary': {'used_percent': 0, 'reset_at': 1781813603, 'window_minutes': 300},
+                        'secondary': {'used_percent': 0, 'reset_at': 1782363500, 'window_minutes': 10080},
+                    },
+                }
+            )
+        ],
+    )
+
+    snap = CodexQuotaReader(sessions).read_quota()
+
+    assert snap.primary.used_percent == 12
+    assert snap.secondary.used_percent == 34
+    assert snap.quota_file == session
 
 
 def test_logged_limit_reached_sets_signal(tmp_path: Path) -> None:
