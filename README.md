@@ -5,7 +5,7 @@ Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的三色�
 这一版把“状态”和“额度”彻底分开：
 
 - **工作状态**：通过 Codex Hooks 主动上报到 `%USERPROFILE%\.codex_widget\hook_events.jsonl`
-- **额度信息**：继续读取 `%USERPROFILE%\.codex\sessions\**\*.jsonl` 里的 `token_count` 事件
+- **额度信息**：优先读取 Codex 本地日志里的 `codex.rate_limits`，再回退到 `%USERPROFILE%\.codex\sessions\**\*.jsonl` 里的 `token_count` 事件
 
 这样可以避免旧版用 session 文件修改时间判断状态时，长时间思考被误判成绿色的问题。
 
@@ -67,11 +67,9 @@ uv run python main.py --once
 正常时会看到类似：
 
 ```text
-状态：Codex 正在干活
-5小时：29% 已用 / 71% 剩余
-周额度：54% 已用 / 46% 剩余
-重置：04:22 / 周五 00:18
-更新：01:14:13
+状态：工作中
+5小时：剩余 71% 04:22
+周额度：剩余 46% 周五 00:18
 提示：hook 工作中: UserPromptSubmit 01:14:10
 ```
 
@@ -192,4 +190,4 @@ codex_status_widget/
 - Hook writer 不保存 prompt、tool input、tool output，只保存事件名、session id、turn id、cwd、model 等生命周期字段。
 - Hook writer 不输出 stdout，避免影响 Codex 上下文。
 - Hook writer 异常时返回 0，避免因为小挂件故障阻塞 Codex。
-- 额度读取仍然沿用本地 `token_count`，不使用 API Key、不读取 ChatGPT Cookie。
+- 额度读取只使用本地 Codex 日志和 `token_count`，不使用 API Key、不读取 ChatGPT Cookie。

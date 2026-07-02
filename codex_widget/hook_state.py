@@ -29,6 +29,11 @@ IDLE_EVENTS = {
     'WidgetManualIdle',
 }
 
+TRANSCRIPT_FINISHED_EVENTS = {
+    'task_complete',
+    'turn_aborted',
+}
+
 TRANSCRIPTLESS_STALE_AFTER_MINUTES = 10
 MAX_TRANSCRIPT_BYTES_TO_READ = 512 * 1024
 
@@ -65,8 +70,10 @@ class HookStateReader:
         sessions: dict[str, _SessionState] = {}
         last_event: dict[str, Any] | None = None
         for event in events:
-            last_event = event
             event_name = _as_str(event.get('hook_event_name'))
+            if not event_name:
+                continue
+            last_event = event
             if event_name == 'WidgetManualIdle':
                 for existing in sessions.values():
                     existing.status = 'idle'
@@ -214,13 +221,13 @@ class HookStateReader:
         for state in sessions.values():
             if state.status != 'working' or not state.transcript_path or not state.turn_id:
                 continue
-            completed_at = _read_task_completed_at(Path(state.transcript_path), state.turn_id)
+            completed_at = _read_task_finished_at(Path(state.transcript_path), state.turn_id)
             if completed_at is None:
                 continue
             state.status = 'idle'
             state.last_event_name = 'TaskComplete'
             state.last_event_at = completed_at
-            state.note = 'transcript 已记录完成，视为闲置'
+            state.note = 'transcript 已记录结束，视为闲置'
 
 
 def _signal_from_state(
@@ -254,7 +261,7 @@ def _expire_transcriptless_working_states(sessions: dict[str, _SessionState], no
             state.note = '无 transcript 的 hook 工作状态已过期，视为闲置'
 
 
-def _read_task_completed_at(transcript_path: Path, turn_id: str) -> datetime | None:
+def _read_task_finished_at(transcript_path: Path, turn_id: str) -> datetime | None:
     try:
         lines = _read_recent_transcript_lines(transcript_path.expanduser())
     except OSError:
@@ -269,7 +276,7 @@ def _read_task_completed_at(transcript_path: Path, turn_id: str) -> datetime | N
         payload = event.get('payload')
         if not isinstance(payload, dict):
             continue
-        if event.get('type') != 'event_msg' or payload.get('type') != 'task_complete':
+        if event.get('type') != 'event_msg' or payload.get('type') not in TRANSCRIPT_FINISHED_EVENTS:
             continue
         if _as_str(payload.get('turn_id')) != turn_id:
             continue

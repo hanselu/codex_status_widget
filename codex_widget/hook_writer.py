@@ -24,7 +24,11 @@ def main() -> int:
     try:
         raw = sys.stdin.read()
         payload = _safe_loads(raw)
+        if payload is None:
+            return 0
         event = _normalize_event(payload)
+        if event is None:
+            return 0
         _append_jsonl(EVENTS_PATH, event)
         # No stdout: for UserPromptSubmit, stdout can be interpreted
         # as extra context. Stay silent so this hook never changes Codex behavior.
@@ -35,44 +39,69 @@ def main() -> int:
         return 0
 
 
-def _safe_loads(raw: str) -> dict[str, Any]:
-    if not raw.strip():
-        return {}
+def _safe_loads(raw: str) -> dict[str, Any] | None:
+    stripped = raw.strip()
+    if not stripped:
+        return None
+
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(stripped)
     except json.JSONDecodeError:
-        return {'_raw': raw[:2000], '_json_error': True}
+        for line in reversed(stripped.splitlines()):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
     if isinstance(parsed, dict):
         return parsed
-    return {'_value': parsed}
+    if isinstance(parsed, list):
+        for item in reversed(parsed):
+            if isinstance(item, dict):
+                return item
+    return None
 
 
-def _normalize_event(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalize_event(payload: dict[str, Any]) -> dict[str, Any] | None:
     now = datetime.now(timezone.utc).isoformat()
-    hook_event_name = _as_str(payload.get('hook_event_name'))
+    hook_event_name = _first_str(payload, 'hook_event_name', 'hookEventName', 'event', 'eventName', 'type', 'name')
     # Older or experimental builds may use a different key; keep a fallback.
     if not hook_event_name:
-        hook_event_name = _as_str(payload.get('event') or payload.get('type'))
+        nested = payload.get('payload')
+        if isinstance(nested, dict):
+            return _normalize_event(nested)
+        return None
 
     event = {
         'recorded_at': now,
         'hook_event_name': hook_event_name,
-        'session_id': _as_str(payload.get('session_id')),
-        'turn_id': _as_str(payload.get('turn_id')),
+        'session_id': _first_str(payload, 'session_id', 'sessionId'),
+        'turn_id': _first_str(payload, 'turn_id', 'turnId'),
         'cwd': _as_str(payload.get('cwd')),
         'model': _as_str(payload.get('model')),
-        'permission_mode': _as_str(payload.get('permission_mode')),
-        'transcript_path': _as_str(payload.get('transcript_path')),
-        'tool_name': _as_str(payload.get('tool_name')),
-        'tool_use_id': _as_str(payload.get('tool_use_id')),
+        'permission_mode': _first_str(payload, 'permission_mode', 'permissionMode'),
+        'transcript_path': _first_str(payload, 'transcript_path', 'transcriptPath'),
+        'tool_name': _first_str(payload, 'tool_name', 'toolName'),
+        'tool_use_id': _first_str(payload, 'tool_use_id', 'toolUseId'),
         'source': _as_str(payload.get('source')),
-        'agent_type': _as_str(payload.get('agent_type')),
+        'agent_type': _first_str(payload, 'agent_type', 'agentType'),
         'pid': os.getpid(),
     }
     # Keep only top-level key names for diagnostics. Do not persist prompt text,
     # tool input, or tool output; the widget only needs lifecycle state.
     event['input_keys'] = sorted(str(key) for key in payload.keys())[:80]
     return event
+
+
+def _first_str(payload: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _as_str(payload.get(key))
+        if value:
+            return value
+    return ''
 
 
 def _append_jsonl(path: Path, event: dict[str, Any]) -> None:

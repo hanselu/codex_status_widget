@@ -117,6 +117,40 @@ def test_prefers_logged_rate_limits(tmp_path: Path) -> None:
     assert snap.quota_file == logs
 
 
+def test_reads_received_message_logged_rate_limits(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'a.jsonl'
+    logs = codex_home / 'logs_2.sqlite'
+    _write_jsonl(session, [_token_count(12, 34, limit_name='session')])
+    _write_logs_db(
+        logs,
+        [
+            'Received message '
+            + json.dumps(
+                {
+                    'type': 'codex.rate_limits',
+                    'plan_type': 'pro',
+                    'rate_limits': {
+                        'allowed': True,
+                        'limit_reached': False,
+                        'primary': {'used_percent': 6, 'reset_at': 1781813603, 'window_minutes': 300},
+                        'secondary': {'used_percent': 36, 'reset_at': 1782363500, 'window_minutes': 10080},
+                    },
+                }
+            )
+        ],
+    )
+
+    snap = CodexQuotaReader(sessions).read_quota()
+
+    assert snap.primary.used_percent == 6
+    assert snap.secondary.used_percent == 36
+    assert snap.quota_source == 'codex.rate_limits'
+    assert snap.note == ''
+    assert snap.quota_file == logs
+
+
 def test_logged_limit_reached_sets_signal(tmp_path: Path) -> None:
     codex_home = tmp_path / '.codex'
     sessions = codex_home / 'sessions'

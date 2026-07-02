@@ -41,6 +41,26 @@ def _write_task_complete(transcript: Path, turn_id: str, completed_at: datetime 
     )
 
 
+def _write_turn_aborted(transcript: Path, turn_id: str, completed_at: datetime | None = None) -> None:
+    completed_at = completed_at or datetime.now(timezone.utc)
+    transcript.write_text(
+        json.dumps(
+            {
+                'timestamp': completed_at.isoformat(),
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'turn_aborted',
+                    'turn_id': turn_id,
+                    'completed_at': int(completed_at.timestamp()),
+                    'reason': 'interrupted',
+                },
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+
 def test_user_prompt_submit_sets_working(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit')
@@ -129,6 +149,21 @@ def test_transcript_task_complete_sets_idle_without_stop(tmp_path: Path) -> None
     assert 'transcript' in signal.note
 
 
+def test_transcript_turn_aborted_sets_idle_without_stop(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    transcript = tmp_path / 'rollout.jsonl'
+    completed_at = datetime.now(timezone.utc)
+    _write_turn_aborted(transcript, 't1', completed_at)
+    _append(events, hook_event_name='UserPromptSubmit', transcript_path=str(transcript))
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'idle'
+    assert signal.last_event_name == 'TaskComplete'
+    assert signal.last_event_at == completed_at.replace(microsecond=0)
+    assert 'transcript' in signal.note
+
+
 def test_transcript_completion_for_other_turn_stays_working(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     transcript = tmp_path / 'rollout.jsonl'
@@ -162,3 +197,12 @@ def test_manual_idle_forces_idle(tmp_path: Path) -> None:
     signal = reader.read_signal()
 
     assert signal.status == 'idle'
+
+
+def test_invalid_hook_events_are_ignored(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='')
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'unknown'

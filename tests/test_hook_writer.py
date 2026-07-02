@@ -28,3 +28,26 @@ def test_hook_writer_trims_large_event_file(tmp_path: Path, monkeypatch) -> None
     assert len(lines) == 3
     assert session_ids == ['7', '8', '9']
     assert events_path.stat().st_size <= 600
+
+
+def test_hook_writer_ignores_non_json_payload() -> None:
+    assert hook_writer._safe_loads('not json') is None
+
+
+def test_hook_writer_normalizes_camel_case_payload() -> None:
+    event = hook_writer._normalize_event(
+        {
+            'hookEventName': 'Stop',
+            'sessionId': 's1',
+            'turnId': 't1',
+            'transcriptPath': 'C:/tmp/rollout.jsonl',
+            'permissionMode': 'never',
+        }
+    )
+
+    assert event is not None
+    assert event['hook_event_name'] == 'Stop'
+    assert event['session_id'] == 's1'
+    assert event['turn_id'] == 't1'
+    assert event['transcript_path'] == 'C:/tmp/rollout.jsonl'
+    assert event['permission_mode'] == 'never'

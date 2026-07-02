@@ -88,8 +88,8 @@ def test_snapshot_text_matches_compact_widget_layout(tmp_path: Path) -> None:
 
     snapshot = CodexSnapshotReader(sessions, events).read_snapshot()
 
-    assert snapshot.primary_text == '5小时：75% 未知'
-    assert snapshot.secondary_text == '周额度：60% 未知'
+    assert snapshot.primary_text == '5小时：剩余 75% 未知'
+    assert snapshot.secondary_text == '周额度：剩余 60% 未知'
     assert snapshot.reset_text == ''
     assert snapshot.updated_text.count(':') == 2
     assert '更新：' not in snapshot.updated_text

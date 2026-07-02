@@ -159,13 +159,23 @@ class CodexQuotaReader:
 
     def _find_latest_logged_rate_limits(self) -> tuple[dict[str, Any] | None, Path | None, str]:
         auth_mtime = self._auth_state_mtime()
+        latest: tuple[float, dict[str, Any], Path] | None = None
         for path in self._log_db_paths():
             if _file_is_older_than(path, auth_mtime):
                 continue
-            event = _read_latest_logged_rate_limits(path)
-            if event is not None:
-                return event, path, ''
-        return None, None, ''
+            result = _read_latest_logged_rate_limits(path)
+            if result is None:
+                continue
+            event, event_ts = result
+            if event_ts is not None and auth_mtime is not None and event_ts < auth_mtime:
+                continue
+            sort_ts = event_ts if event_ts is not None else _path_mtime(path)
+            if latest is None or sort_ts > latest[0]:
+                latest = (sort_ts, event, path)
+
+        if latest is None:
+            return None, None, ''
+        return latest[1], latest[2], ''
 
     def _log_db_paths(self) -> list[Path]:
         codex_home = self.sessions_dir.parent
@@ -230,7 +240,7 @@ def quota_text(window: QuotaWindow) -> str:
     if window.used_percent is None:
         return '未读取'
     remain = format_percent(window.remaining_percent if window.remaining_percent is not None else 0)
-    return remain
+    return f'剩余 {remain}'
 
 
 def reset_text(primary: QuotaWindow, secondary: QuotaWindow) -> str:
@@ -377,7 +387,7 @@ def _rate_limit_reached(event: dict[str, Any] | None) -> bool:
     return bool(rate_limits.get('limit_reached') or rate_limits.get('rate_limit_reached_type'))
 
 
-def _read_latest_logged_rate_limits(path: Path) -> dict[str, Any] | None:
+def _read_latest_logged_rate_limits(path: Path) -> tuple[dict[str, Any], float | None] | None:
     if not path.exists():
         return None
 
@@ -387,16 +397,22 @@ def _read_latest_logged_rate_limits(path: Path) -> dict[str, Any] | None:
         return None
 
     try:
-        rows = con.execute(
-            'select feedback_log_body from logs order by id desc limit ?',
-            (LOG_ROWS_TO_SCAN,),
-        ).fetchall()
+        try:
+            rows = con.execute(
+                'select ts, feedback_log_body from logs order by id desc limit ?',
+                (LOG_ROWS_TO_SCAN,),
+            ).fetchall()
+        except sqlite3.Error:
+            rows = con.execute(
+                'select null, feedback_log_body from logs order by id desc limit ?',
+                (LOG_ROWS_TO_SCAN,),
+            ).fetchall()
     except sqlite3.Error:
         return None
     finally:
         con.close()
 
-    for (body,) in rows:
+    for row_ts, body in rows:
         if not isinstance(body, str) or 'codex.rate_limits' not in body:
             continue
         event = _parse_logged_websocket_event(body)
@@ -409,16 +425,23 @@ def _read_latest_logged_rate_limits(path: Path) -> dict[str, Any] | None:
             'type': 'token_count',
             'rate_limits': rate_limits,
             '_quota_source': 'codex.rate_limits',
-        }
+        }, _as_float(row_ts)
 
     return None
 
 
 def _parse_logged_websocket_event(body: str) -> dict[str, Any] | None:
-    marker = 'websocket event: '
-    if marker not in body:
+    raw = ''
+    if body.startswith('Received message '):
+        raw = body.removeprefix('Received message ').strip()
+    else:
+        for marker in ('websocket event: ', 'SSE event: '):
+            if marker in body:
+                raw = body.split(marker, 1)[1].strip()
+                break
+    if not raw:
         return None
-    raw = body.split(marker, 1)[1].strip()
+
     event = _loads_json_line(raw)
     return event if isinstance(event, dict) else None
 
@@ -430,6 +453,13 @@ def _file_is_older_than(path: Path | None, mtime: float | None) -> bool:
         return path.stat().st_mtime < mtime
     except OSError:
         return False
+
+
+def _path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _parse_datetime(value: Any) -> datetime | None:
