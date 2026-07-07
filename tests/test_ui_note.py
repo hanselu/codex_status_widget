@@ -24,7 +24,7 @@ def test_format_display_note_keeps_multiple_notes_on_one_line() -> None:
 
 
 def test_format_display_note_keeps_active_summary() -> None:
-    assert _format_display_note('等待 1 · 工作 2 · 响应 1') == '等待 1 · 工作 2 · 响应 1'
+    assert _format_display_note('待确认 × 1 · 工作 × 2') == '待确认 × 1 · 工作 × 2'
 
 
 def test_format_display_note_translates_expired_event() -> None:

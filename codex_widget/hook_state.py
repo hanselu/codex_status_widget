@@ -9,11 +9,8 @@ from typing import Any
 from .models import HookSignal, HookSignalName
 
 
-RESPONDING_EVENTS = {
-    'UserPromptSubmit',
-}
-
 WORKING_EVENTS = {
+    'UserPromptSubmit',
     'PreToolUse',
     'SubagentStart',
 }
@@ -22,7 +19,7 @@ WAITING_EVENTS = {
     'PermissionRequest',
 }
 
-BACK_TO_RESPONDING_EVENTS = {
+BACK_TO_WORKING_EVENTS = {
     'PostToolUse',
     'SubagentStop',
 }
@@ -45,7 +42,7 @@ TRANSCRIPT_FINISHED_EVENTS = {
 
 TRANSCRIPTLESS_STALE_AFTER_MINUTES = 10
 MAX_TRANSCRIPT_BYTES_TO_READ = 512 * 1024
-ACTIVE_STATUS_PRIORITY = ('waiting', 'working', 'responding')
+ACTIVE_STATUS_PRIORITY = ('waiting', 'working')
 ACTIVE_STATUSES = set(ACTIVE_STATUS_PRIORITY)
 
 
@@ -216,10 +213,6 @@ class HookStateReader:
         state.transcript_path = _as_str(event.get('transcript_path')) or state.transcript_path
         state.tool_name = _as_str(event.get('tool_name')) or state.tool_name
 
-        if event_name in RESPONDING_EVENTS:
-            state.status = 'responding'
-            state.note = ''
-            return
         if event_name in WAITING_EVENTS:
             state.status = 'waiting'
             state.note = ''
@@ -228,9 +221,9 @@ class HookStateReader:
             state.status = 'working'
             state.note = ''
             return
-        if event_name in BACK_TO_RESPONDING_EVENTS:
+        if event_name in BACK_TO_WORKING_EVENTS:
             if state.status in ACTIVE_STATUSES:
-                state.status = 'responding'
+                state.status = 'working'
             else:
                 state.status = 'idle'
             state.note = ''
@@ -297,7 +290,6 @@ def _signal_from_active_states(active_states: list[_SessionState], events_path: 
         model=state.model,
         note=_format_active_summary(counts),
         detail=_format_active_detail(active_states),
-        responding_count=counts['responding'],
         working_count=counts['working'],
         waiting_count=counts['waiting'],
         events_path=events_path,
@@ -318,19 +310,16 @@ def _aggregate_status(counts: dict[str, int]) -> HookSignalName:
 def _format_active_summary(counts: dict[str, int]) -> str:
     parts = []
     if counts['waiting']:
-        parts.append(f'等待 {counts["waiting"]}')
+        parts.append(f'待确认 × {counts["waiting"]}')
     if counts['working']:
-        parts.append(f'工作 {counts["working"]}')
-    if counts['responding']:
-        parts.append(f'响应 {counts["responding"]}')
+        parts.append(f'工作 × {counts["working"]}')
     return ' · '.join(parts)
 
 
 def _format_active_detail(states: list[_SessionState]) -> str:
     title_by_status = {
-        'waiting': '等待确认',
+        'waiting': '待确认',
         'working': '工作中',
-        'responding': '响应中',
     }
     lines: list[str] = []
     for status in ACTIVE_STATUS_PRIORITY:
@@ -339,7 +328,7 @@ def _format_active_detail(states: list[_SessionState]) -> str:
             continue
         if lines:
             lines.append('')
-        lines.append(f'{title_by_status[status]} {len(status_states)}')
+        lines.append(title_by_status[status])
         for state in sorted(
             status_states,
             key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc),

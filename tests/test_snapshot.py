@@ -46,7 +46,7 @@ def test_hook_activity_overrides_stale_session_mtime(tmp_path: Path) -> None:
 
     snapshot = CodexSnapshotReader(sessions, events).read_snapshot()
 
-    assert snapshot.status == 'responding'
+    assert snapshot.status == 'working'
     assert snapshot.primary.used_percent == 10
 
 
@@ -116,11 +116,166 @@ def test_waiting_status_overrides_other_active_sessions(tmp_path: Path) -> None:
     snapshot = CodexSnapshotReader(sessions, events).read_snapshot()
 
     assert snapshot.status == 'waiting'
-    assert snapshot.status_text == '等待确认'
-    assert snapshot.note == '等待 1 · 工作 1 · 响应 1'
-    assert '等待确认 1' in snapshot.detail
-    assert '工作中 1' in snapshot.detail
-    assert '响应中 1' in snapshot.detail
+    assert snapshot.status_text == '待确认'
+    assert snapshot.note == '待确认 × 1 · 工作 × 2'
+    assert '待确认' in snapshot.detail
+    assert '工作中' in snapshot.detail
+    assert '待确认 1' not in snapshot.detail
+    assert '工作中 2' not in snapshot.detail
+
+
+def test_pending_transcript_approval_overrides_working_status(tmp_path: Path) -> None:
+    sessions = tmp_path / 'sessions'
+    session = sessions / 'a.jsonl'
+    session.parent.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    session.write_text(
+        '\n'.join(
+            [
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'session_meta',
+                        'payload': {'session_id': 'approval-session', 'cwd': 'D:/Project/NeedsApproval'},
+                    }
+                ),
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'event_msg',
+                        'payload': {
+                            'type': 'token_count',
+                            'rate_limits': {
+                                'primary': {'used_percent': 10, 'resets_at': None, 'window_minutes': 300},
+                                'secondary': {'used_percent': 20, 'resets_at': None, 'window_minutes': 10080},
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'response_item',
+                        'payload': {
+                            'type': 'function_call',
+                            'name': 'shell_command',
+                            'call_id': 'call-needs-approval',
+                            'arguments': json.dumps(
+                                {
+                                    'command': 'Remove-Item temp.txt',
+                                    'sandbox_permissions': 'require_escalated',
+                                }
+                            ),
+                            'internal_chat_message_metadata_passthrough': {'turn_id': 'approval-turn'},
+                        },
+                    }
+                ),
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    events = tmp_path / 'hook_events.jsonl'
+    events.write_text(
+        json.dumps(
+            {
+                'recorded_at': now.isoformat(),
+                'hook_event_name': 'UserPromptSubmit',
+                'session_id': 'working-session',
+                'turn_id': 'working-turn',
+                'cwd': 'D:/Project/Working',
+                'model': '',
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    snapshot = CodexSnapshotReader(sessions, events).read_snapshot()
+
+    assert snapshot.status == 'waiting'
+    assert snapshot.status_text == '待确认'
+    assert snapshot.note == '待确认 × 1 · 工作 × 1'
+    assert '待确认' in snapshot.detail
+    assert '待确认 1' not in snapshot.detail
+    assert 'NeedsApproval' in snapshot.detail
+
+
+def test_completed_transcript_approval_does_not_stay_waiting(tmp_path: Path) -> None:
+    sessions = tmp_path / 'sessions'
+    session = sessions / 'a.jsonl'
+    session.parent.mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    session.write_text(
+        '\n'.join(
+            [
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'session_meta',
+                        'payload': {'session_id': 'approval-session', 'cwd': 'D:/Project/NeedsApproval'},
+                    }
+                ),
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'event_msg',
+                        'payload': {
+                            'type': 'token_count',
+                            'rate_limits': {
+                                'primary': {'used_percent': 10, 'resets_at': None, 'window_minutes': 300},
+                                'secondary': {'used_percent': 20, 'resets_at': None, 'window_minutes': 10080},
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'response_item',
+                        'payload': {
+                            'type': 'function_call',
+                            'name': 'shell_command',
+                            'call_id': 'call-needs-approval',
+                            'arguments': json.dumps({'sandbox_permissions': 'require_escalated'}),
+                            'internal_chat_message_metadata_passthrough': {'turn_id': 'approval-turn'},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        'timestamp': now.isoformat(),
+                        'type': 'response_item',
+                        'payload': {'type': 'function_call_output', 'call_id': 'call-needs-approval'},
+                    }
+                ),
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    events = tmp_path / 'hook_events.jsonl'
+    events.write_text(
+        json.dumps(
+            {
+                'recorded_at': now.isoformat(),
+                'hook_event_name': 'UserPromptSubmit',
+                'session_id': 'working-session',
+                'turn_id': 'working-turn',
+                'cwd': 'D:/Project/Working',
+                'model': '',
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    snapshot = CodexSnapshotReader(sessions, events).read_snapshot()
+
+    assert snapshot.status == 'working'
+    assert '待确认' not in snapshot.detail
 
 
 def test_snapshot_text_matches_compact_widget_layout(tmp_path: Path) -> None:
@@ -367,7 +522,7 @@ def test_codex_app_not_running_forces_red_status(tmp_path: Path) -> None:
     snapshot = CodexSnapshotReader(sessions, events, codex_app_running=lambda: False).read_snapshot()
 
     assert snapshot.status == 'offline'
-    assert snapshot.status_text == 'Codex 未运行'
+    assert snapshot.status_text == '无额度'
     assert snapshot.codex_app_running is False
     assert 'Codex App 未运行' in snapshot.note
 

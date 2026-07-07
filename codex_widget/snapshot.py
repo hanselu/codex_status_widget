@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 
+from .approval_state import PendingApproval, read_pending_approvals
 from .hook_installer import HookSetupStatus
 from .hook_state import HookStateReader
 from .models import CodexSnapshot, HookSignal, StatusName
@@ -36,6 +37,11 @@ class CodexSnapshotReader:
         now = datetime.now().astimezone()
         quota = self.quota_reader.read_quota()
         hook_signal = self.hook_reader.read_signal()
+        pending_approvals = read_pending_approvals(
+            self.quota_reader.sessions_dir,
+            stale_after_minutes=self.hook_reader.stale_after_minutes,
+        )
+        hook_signal = _merge_pending_approvals(hook_signal, pending_approvals)
         codex_app_running = self._read_codex_app_running()
         hook_setup_note = _visible_hook_setup_note(self._read_hook_setup_status())
 
@@ -91,7 +97,7 @@ class CodexSnapshotReader:
         ):
             return 'cooldown'
 
-        if hook_signal.status in {'waiting', 'working', 'responding'}:
+        if hook_signal.status in {'waiting', 'working'}:
             return hook_signal.status
         if hook_signal.status == 'idle':
             return 'idle'
@@ -111,11 +117,10 @@ class CodexSnapshotReader:
     def _status_text(status: StatusName) -> str:
         return {
             'idle': '闲置中',
-            'responding': '响应中',
             'working': '工作中',
-            'waiting': '等待确认',
+            'waiting': '待确认',
             'cooldown': '无额度',
-            'offline': 'Codex 未运行',
+            'offline': '无额度',
         }[status]
 
 
@@ -157,6 +162,60 @@ def _visible_hook_setup_note(status: HookSetupStatus | None) -> str:
         parts.append('需要重新添加钩子')
 
     return '钩子配置不完整：' + '，'.join(parts)
+
+
+def _merge_pending_approvals(hook_signal: HookSignal, approvals: list[PendingApproval]) -> HookSignal:
+    if not approvals or hook_signal.status == 'waiting':
+        return hook_signal
+
+    latest = approvals[0]
+    working_count = hook_signal.working_count
+    if hook_signal.status == 'working' and working_count == 0:
+        working_count = 1
+
+    parts = [f'待确认 × {len(approvals)}']
+    if working_count:
+        parts.append(f'工作 × {working_count}')
+
+    detail_parts = [_format_pending_approval_detail(approvals)]
+    if hook_signal.detail:
+        detail_parts.append(hook_signal.detail)
+    elif hook_signal.note and hook_signal.status == 'working':
+        detail_parts.append(hook_signal.note)
+
+    return HookSignal(
+        status='waiting',
+        last_event_name='TranscriptApprovalRequest',
+        last_event_at=latest.requested_at,
+        session_id=latest.session_id,
+        turn_id=latest.turn_id,
+        cwd=latest.cwd,
+        model=hook_signal.model,
+        note=' · '.join(parts),
+        detail='\n\n'.join(part for part in detail_parts if part),
+        working_count=working_count,
+        waiting_count=len(approvals),
+        events_path=hook_signal.events_path,
+    )
+
+
+def _format_pending_approval_detail(approvals: list[PendingApproval]) -> str:
+    lines = ['待确认']
+    for approval in approvals:
+        parts = [_approval_label(approval)]
+        parts.append(f'{approval.requested_at.astimezone():%H:%M:%S}')
+        if approval.tool_name:
+            parts.append(approval.tool_name)
+        lines.append('- ' + ' · '.join(parts))
+    return '\n'.join(lines)
+
+
+def _approval_label(approval: PendingApproval) -> str:
+    if approval.cwd:
+        return Path(approval.cwd).name or approval.cwd
+    if approval.session_id:
+        return approval.session_id[:8]
+    return '未知对话'
 
 
 def _split_notes(items: list[str]) -> list[str]:

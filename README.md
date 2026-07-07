@@ -7,19 +7,18 @@ Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的多状�
 - **工作状态**：通过 Codex Hooks 主动上报到 `%USERPROFILE%\.codex_widget\hook_events.jsonl`
 - **额度信息**：优先读取 Codex 本地日志里的 `codex.rate_limits`，再回退到 `%USERPROFILE%\.codex\sessions\**\*.jsonl` 里的 `token_count` 事件
 
-这样可以避免旧版用 session 文件修改时间判断状态时，长时间响应被误判成绿色的问题。
+这样可以避免旧版用 session 文件修改时间判断状态时，长时间任务被误判成绿色的问题。
 
 ## 状态灯规则
 
 | 颜色 | 状态 | 规则 |
 |---|---|---|
 | 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有活跃 turn |
-| 蓝色 | 响应中 | Hook 收到 `UserPromptSubmit` 或 `PostToolUse`，表示当前 turn 仍在进行，但没有正在执行工具或等待权限确认 |
-| 黄色 | 工作中 | Hook 收到 `PreToolUse` 或 `SubagentStart`，表示工具或子任务正在执行 |
-| 橙色 | 等待确认 | Hook 收到 `PermissionRequest`，等待用户处理权限确认 |
-| 红色 | 无额度 / Codex 未运行 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 Codex App 进程未运行 |
+| 蓝色 | 工作中 | 有活跃 turn，包括生成响应、工具执行或子任务运行 |
+| 橙色 | 待确认 | Hook 收到 `PermissionRequest`，或 transcript 中出现尚未完成的 `require_escalated` 工具调用 |
+| 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 Codex App 进程未运行 |
 
-多对话同时运行时，主状态灯按优先级聚合：红色异常 > 等待确认 > 工作中 > 响应中 > 闲置。小挂件正文只显示数量摘要，托盘和悬停提示显示具体对话明细。
+多对话同时运行时，主状态灯按优先级聚合：红色异常 > 待确认 > 工作中 > 闲置。小挂件正文只显示数量摘要，托盘和悬停提示显示具体对话明细。
 
 除“无额度”会触发红灯外，额度百分比不影响工作状态。
 
@@ -71,10 +70,10 @@ uv run python main.py --once
 正常时会看到类似：
 
 ```text
-状态：等待确认
+状态：待确认
 5小时：71% 04:22
 周额度：46% 7-12 16:23
-提示：等待 1 · 工作 2 · 响应 1
+提示：待确认 × 1 · 工作 × 2
 ```
 
 ## 启动小挂件
@@ -159,7 +158,7 @@ refresh_interval_seconds = 5
 
 说明：
 
-- 安装 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop` 和 `Stop`，用于区分响应、工作、等待确认和闲置。
+- 安装 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop` 和 `Stop`，用于区分工作、待确认和闲置。
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
 - `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
 - 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 Codex App 的孤儿事件长期保持状态灯活跃。

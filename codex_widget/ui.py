@@ -23,8 +23,7 @@ from .snapshot import CodexSnapshotReader
 
 STATUS_COLORS: dict[StatusName, str] = {
     'idle': '#31c46b',
-    'responding': '#4aa3ff',
-    'working': '#f4c542',
+    'working': '#4aa3ff',
     'waiting': '#ff9f1c',
     'cooldown': '#ff5a5f',
     'offline': '#ff5a5f',
@@ -35,7 +34,7 @@ HOOK_EVENT_LABELS = {
     'UserPromptSubmit': '提交提示词',
     'PreToolUse': '工具调用前',
     'PostToolUse': '工具调用后',
-    'PermissionRequest': '等待权限确认',
+    'PermissionRequest': '待确认',
     'Stop': '响应结束',
     'TaskComplete': '任务完成',
     'UserPromptSubmitExpired': '已自动恢复闲置',
