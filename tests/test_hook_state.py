@@ -61,13 +61,13 @@ def _write_turn_aborted(transcript: Path, turn_id: str, completed_at: datetime |
     )
 
 
-def test_user_prompt_submit_sets_thinking(tmp_path: Path) -> None:
+def test_user_prompt_submit_sets_responding(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit')
 
     signal = HookStateReader(events).read_signal()
 
-    assert signal.status == 'thinking'
+    assert signal.status == 'responding'
     assert signal.last_event_name == 'UserPromptSubmit'
 
 
@@ -103,7 +103,7 @@ def test_tool_events_after_stop_stay_idle(tmp_path: Path) -> None:
     assert signal.status == 'idle'
 
 
-def test_pre_tool_use_replaces_thinking_lifecycle_event(tmp_path: Path) -> None:
+def test_pre_tool_use_replaces_responding_lifecycle_event(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit')
     _append(events, hook_event_name='PreToolUse')
@@ -114,7 +114,7 @@ def test_pre_tool_use_replaces_thinking_lifecycle_event(tmp_path: Path) -> None:
     assert signal.last_event_name == 'PreToolUse'
 
 
-def test_post_tool_use_returns_to_thinking(tmp_path: Path) -> None:
+def test_post_tool_use_returns_to_responding(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit')
     _append(events, hook_event_name='PreToolUse')
@@ -122,11 +122,11 @@ def test_post_tool_use_returns_to_thinking(tmp_path: Path) -> None:
 
     signal = HookStateReader(events).read_signal()
 
-    assert signal.status == 'thinking'
+    assert signal.status == 'responding'
     assert signal.last_event_name == 'PostToolUse'
 
 
-def test_waiting_has_priority_over_working_and_thinking(tmp_path: Path) -> None:
+def test_waiting_has_priority_over_working_and_responding(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit', session_id='s1', turn_id='t1', cwd='D:/Project/A')
     _append(
@@ -151,8 +151,8 @@ def test_waiting_has_priority_over_working_and_thinking(tmp_path: Path) -> None:
     assert signal.status == 'waiting'
     assert signal.waiting_count == 1
     assert signal.working_count == 1
-    assert signal.thinking_count == 1
-    assert signal.note == '等待 1 · 工作 1 · 思考 1'
+    assert signal.responding_count == 1
+    assert signal.note == '等待 1 · 工作 1 · 响应 1'
     assert '等待确认 1' in signal.detail
     assert '- C' in signal.detail
 
@@ -164,8 +164,8 @@ def test_same_session_new_prompt_replaces_previous_turn(tmp_path: Path) -> None:
 
     signal = HookStateReader(events).read_signal()
 
-    assert signal.status == 'thinking'
-    assert signal.thinking_count == 1
+    assert signal.status == 'responding'
+    assert signal.responding_count == 1
     assert signal.turn_id == 't2'
 
 
@@ -182,7 +182,7 @@ def test_same_session_stop_clears_previous_unfinished_turn(tmp_path: Path) -> No
     assert signal.turn_id == 't2'
 
 
-def test_long_thinking_stays_active_until_stale_cutoff(tmp_path: Path) -> None:
+def test_long_responding_stays_active_until_stale_cutoff(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     transcript = tmp_path / 'rollout.jsonl'
     transcript.write_text('', encoding='utf-8')
@@ -195,7 +195,7 @@ def test_long_thinking_stays_active_until_stale_cutoff(tmp_path: Path) -> None:
     )
 
     signal = HookStateReader(events, stale_after_minutes=360).read_signal()
-    assert signal.status == 'thinking'
+    assert signal.status == 'responding'
 
     stale_signal = HookStateReader(events, stale_after_minutes=5).read_signal()
     assert stale_signal.status == 'idle'
@@ -240,7 +240,7 @@ def test_transcript_completion_for_other_turn_stays_working(tmp_path: Path) -> N
 
     signal = HookStateReader(events).read_signal()
 
-    assert signal.status == 'thinking'
+    assert signal.status == 'responding'
     assert signal.last_event_name == 'UserPromptSubmit'
 
 

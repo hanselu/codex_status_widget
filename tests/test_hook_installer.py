@@ -61,6 +61,10 @@ def test_install_removes_old_widget_hooks(tmp_path: Path, monkeypatch) -> None: 
     assert len(hooks['UserPromptSubmit']) == 1
     assert len(hooks['Stop']) == 1
 
+    status = hook_installer.read_hook_setup_status()
+    assert status.is_complete
+    assert not status.missing_events
+
 
 def test_install_copies_hook_writer_from_pyinstaller_bundle(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     hooks_path = tmp_path / '.codex' / 'hooks.json'
@@ -80,3 +84,58 @@ def test_install_copies_hook_writer_from_pyinstaller_bundle(tmp_path: Path, monk
     hook_installer.install_hooks()
 
     assert writer_path.read_text(encoding='utf-8') == '# bundled hook writer\n'
+
+
+def test_hook_setup_status_reports_missing_events(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    hooks_path = tmp_path / '.codex' / 'hooks.json'
+    writer_path = tmp_path / '.codex_widget' / 'hook_writer.py'
+    config_dir = tmp_path / '.codex_widget'
+    hooks_path.parent.mkdir(parents=True)
+    writer_path.parent.mkdir(parents=True)
+    writer_path.write_text('# installed hook writer\n', encoding='utf-8')
+    hooks_path.write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'UserPromptSubmit': [
+                        {
+                            'hooks': [
+                                {
+                                    'type': 'command',
+                                    'commandWindows': f'py -3 "{writer_path}"',
+                                }
+                            ]
+                        }
+                    ],
+                    'Stop': [
+                        {
+                            'hooks': [
+                                {
+                                    'type': 'command',
+                                    'commandWindows': f'py -3 "{writer_path}"',
+                                }
+                            ]
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(hook_installer, 'CODEX_HOOKS_PATH', hooks_path)
+    monkeypatch.setattr(hook_installer, 'HOOK_WRITER_PATH', writer_path)
+    monkeypatch.setattr(hook_installer, 'CONFIG_DIR', config_dir)
+
+    status = hook_installer.read_hook_setup_status()
+
+    assert not status.is_complete
+    assert status.writer_exists
+    assert set(status.installed_events) == {'UserPromptSubmit', 'Stop'}
+    assert set(status.missing_events) == {
+        'PermissionRequest',
+        'PreToolUse',
+        'PostToolUse',
+        'SubagentStart',
+        'SubagentStop',
+    }

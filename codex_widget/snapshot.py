@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import time
 
+from .hook_installer import HookSetupStatus
 from .hook_state import HookStateReader
 from .models import CodexSnapshot, HookSignal, StatusName
 from .quota_reader import CodexQuotaReader, format_reset_time, quota_is_exhausted, quota_text
@@ -19,6 +20,7 @@ class CodexSnapshotReader:
         hook_max_events_to_read: int = 5000,
         fallback_working_window_seconds: int = 60,
         codex_app_running: Callable[[], bool | None] | None = None,
+        hook_setup_status_reader: Callable[[], HookSetupStatus] | None = None,
     ) -> None:
         self.quota_reader = CodexQuotaReader(sessions_dir)
         self.hook_reader = HookStateReader(
@@ -28,20 +30,22 @@ class CodexSnapshotReader:
         )
         self.fallback_working_window_seconds = fallback_working_window_seconds
         self._codex_app_running = codex_app_running
+        self._hook_setup_status_reader = hook_setup_status_reader
 
     def read_snapshot(self) -> CodexSnapshot:
         now = datetime.now().astimezone()
         quota = self.quota_reader.read_quota()
         hook_signal = self.hook_reader.read_signal()
         codex_app_running = self._read_codex_app_running()
+        hook_setup_note = _visible_hook_setup_note(self._read_hook_setup_status())
 
         status = self._resolve_status(quota, hook_signal, now, codex_app_running)
         app_note = 'Codex App 未运行' if codex_app_running is False else ''
         hook_note = _visible_hook_note(hook_signal)
         hook_detail = _visible_hook_detail(hook_signal)
-        notes = _split_notes([app_note, hook_note, quota.note])
+        notes = _split_notes([app_note, hook_setup_note, hook_note, quota.note])
         note = '\n'.join(_dedupe_preserve_order(notes))
-        detail_notes = _split_notes([app_note, hook_detail, quota.note])
+        detail_notes = _split_notes([app_note, hook_setup_note, hook_detail, quota.note])
         detail = '\n'.join(_dedupe_preserve_order(detail_notes))
 
         return CodexSnapshot(
@@ -69,6 +73,11 @@ class CodexSnapshotReader:
             return None
         return self._codex_app_running()
 
+    def _read_hook_setup_status(self) -> HookSetupStatus | None:
+        if self._hook_setup_status_reader is None:
+            return None
+        return self._hook_setup_status_reader()
+
     def _resolve_status(  # noqa: ANN001
         self, quota, hook_signal: HookSignal, now: datetime, codex_app_running: bool | None
     ) -> StatusName:
@@ -82,7 +91,7 @@ class CodexSnapshotReader:
         ):
             return 'cooldown'
 
-        if hook_signal.status in {'waiting', 'working', 'thinking'}:
+        if hook_signal.status in {'waiting', 'working', 'responding'}:
             return hook_signal.status
         if hook_signal.status == 'idle':
             return 'idle'
@@ -102,7 +111,7 @@ class CodexSnapshotReader:
     def _status_text(status: StatusName) -> str:
         return {
             'idle': '闲置中',
-            'thinking': '思考中',
+            'responding': '响应中',
             'working': '工作中',
             'waiting': '等待确认',
             'cooldown': '无额度',
@@ -131,6 +140,23 @@ def _visible_hook_detail(hook_signal: HookSignal) -> str:
     if hook_signal.status == 'idle':
         return ''
     return hook_signal.detail or hook_signal.note
+
+
+def _visible_hook_setup_note(status: HookSetupStatus | None) -> str:
+    if status is None or status.is_complete:
+        return ''
+
+    parts: list[str] = []
+    if not status.hooks_file_exists:
+        parts.append('未找到 hooks.json')
+    if not status.writer_exists:
+        parts.append('hook_writer.py 不存在')
+    if status.missing_events:
+        parts.append('缺少 ' + '、'.join(status.missing_events))
+    if not parts:
+        parts.append('需要重新添加钩子')
+
+    return '钩子配置不完整：' + '，'.join(parts)
 
 
 def _split_notes(items: list[str]) -> list[str]:

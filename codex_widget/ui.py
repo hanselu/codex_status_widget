@@ -16,14 +16,14 @@ from PySide6.QtWidgets import (
 
 from .config import CONFIG_DIR, AppConfig
 from .codex_app import codex_app_is_running
-from .hook_installer import install_hooks
+from .hook_installer import install_hooks, read_hook_setup_status
 from .models import CodexSnapshot, StatusName
 from .snapshot import CodexSnapshotReader
 
 
 STATUS_COLORS: dict[StatusName, str] = {
     'idle': '#31c46b',
-    'thinking': '#4aa3ff',
+    'responding': '#4aa3ff',
     'working': '#f4c542',
     'waiting': '#ff9f1c',
     'cooldown': '#ff5a5f',
@@ -63,6 +63,7 @@ class CodexWidget(QWidget):
             hook_max_events_to_read=self.config.hook.max_events_to_read,
             fallback_working_window_seconds=self.config.status.working_window_seconds,
             codex_app_running=codex_app_is_running,
+            hook_setup_status_reader=read_hook_setup_status,
         )
         self._drag_offset: QPoint | None = None
         self._last_snapshot: CodexSnapshot | None = None

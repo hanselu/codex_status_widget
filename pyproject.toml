@@ -1,6 +1,6 @@
 [project]
 name = "codex-status-widget"
-version = "0.3.0"
+version = "0.3.1"
 description = "Codex Desktop status and quota widget for Windows"
 requires-python = ">=3.11"
 dependencies = [

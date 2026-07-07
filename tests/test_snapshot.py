@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
+from codex_widget.hook_installer import HookSetupStatus
 from codex_widget.snapshot import CodexSnapshotReader
 
 
@@ -45,7 +46,7 @@ def test_hook_activity_overrides_stale_session_mtime(tmp_path: Path) -> None:
 
     snapshot = CodexSnapshotReader(sessions, events).read_snapshot()
 
-    assert snapshot.status == 'thinking'
+    assert snapshot.status == 'responding'
     assert snapshot.primary.used_percent == 10
 
 
@@ -116,10 +117,10 @@ def test_waiting_status_overrides_other_active_sessions(tmp_path: Path) -> None:
 
     assert snapshot.status == 'waiting'
     assert snapshot.status_text == '等待确认'
-    assert snapshot.note == '等待 1 · 工作 1 · 思考 1'
+    assert snapshot.note == '等待 1 · 工作 1 · 响应 1'
     assert '等待确认 1' in snapshot.detail
     assert '工作中 1' in snapshot.detail
-    assert '思考中 1' in snapshot.detail
+    assert '响应中 1' in snapshot.detail
 
 
 def test_snapshot_text_matches_compact_widget_layout(tmp_path: Path) -> None:
@@ -269,6 +270,62 @@ def test_idle_cleanup_note_is_hidden_from_compact_widget(tmp_path: Path) -> None
     assert snapshot.hook_signal.note
     assert snapshot.note == ''
     assert snapshot.detail == ''
+
+
+def test_snapshot_shows_hook_setup_note_when_incomplete(tmp_path: Path) -> None:
+    sessions = tmp_path / 'sessions'
+    session = sessions / 'a.jsonl'
+    session.parent.mkdir(parents=True)
+    session.write_text(
+        json.dumps(
+            {
+                'payload': {
+                    'type': 'token_count',
+                    'rate_limits': {
+                        'primary': {'used_percent': 25, 'resets_at': None, 'window_minutes': 300},
+                        'secondary': {'used_percent': 40, 'resets_at': None, 'window_minutes': 10080},
+                    },
+                }
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    events = tmp_path / 'hook_events.jsonl'
+    events.write_text(
+        json.dumps(
+            {
+                'recorded_at': datetime.now(timezone.utc).isoformat(),
+                'hook_event_name': 'Stop',
+                'session_id': 's1',
+                'turn_id': 't1',
+                'cwd': '',
+                'model': '',
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    hook_status = HookSetupStatus(
+        hooks_path=tmp_path / 'hooks.json',
+        writer_path=tmp_path / 'hook_writer.py',
+        hooks_file_exists=True,
+        writer_exists=True,
+        installed_events=('UserPromptSubmit', 'Stop'),
+        missing_events=('PreToolUse', 'PostToolUse'),
+    )
+
+    snapshot = CodexSnapshotReader(
+        sessions,
+        events,
+        hook_setup_status_reader=lambda: hook_status,
+    ).read_snapshot()
+
+    assert snapshot.status == 'idle'
+    assert '钩子配置不完整' in snapshot.note
+    assert 'PreToolUse' in snapshot.note
+    assert 'PostToolUse' in snapshot.detail
 
 
 def test_codex_app_not_running_forces_red_status(tmp_path: Path) -> None:
