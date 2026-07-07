@@ -23,7 +23,9 @@ from .snapshot import CodexSnapshotReader
 
 STATUS_COLORS: dict[StatusName, str] = {
     'idle': '#31c46b',
+    'thinking': '#4aa3ff',
     'working': '#f4c542',
+    'waiting': '#ff9f1c',
     'cooldown': '#ff5a5f',
     'offline': '#ff5a5f',
 }
@@ -31,13 +33,17 @@ STATUS_COLORS: dict[StatusName, str] = {
 MIN_WIDGET_HEIGHT = 86
 HOOK_EVENT_LABELS = {
     'UserPromptSubmit': '提交提示词',
-    'Stop': '响应结束',
-    'TaskComplete': '任务完成',
-    'UserPromptSubmitExpired': '提示词事件过期',
-    'SessionStart': '会话开始',
     'PreToolUse': '工具调用前',
     'PostToolUse': '工具调用后',
-    'PermissionRequest': '权限请求',
+    'PermissionRequest': '等待权限确认',
+    'Stop': '响应结束',
+    'TaskComplete': '任务完成',
+    'UserPromptSubmitExpired': '已自动恢复闲置',
+    'PreToolUseExpired': '已自动恢复闲置',
+    'PermissionRequestExpired': '已自动恢复闲置',
+    'SubagentStartExpired': '已自动恢复闲置',
+    'ActiveExpired': '已自动恢复闲置',
+    'SessionStart': '会话开始',
     'SubagentStart': '子任务开始',
     'SubagentStop': '子任务结束',
     'PreCompact': '压缩前',
@@ -81,6 +87,7 @@ class CodexWidget(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        _enable_inactive_tooltips(self)
         self.setWindowOpacity(self.config.ui.opacity)
         self.setFixedWidth(self.config.ui.width)
         self.setFixedHeight(self.config.ui.height)
@@ -139,6 +146,14 @@ class CodexWidget(QWidget):
         layout.addWidget(self.primary_label)
         layout.addWidget(self.secondary_label)
         layout.addWidget(self.note_label)
+        _enable_inactive_tooltips(
+            self.card,
+            self.status_dot,
+            self.title_label,
+            self.primary_label,
+            self.secondary_label,
+            self.note_label,
+        )
 
     def _build_menu(self) -> None:
         self.menu = QMenu(self)
@@ -194,22 +209,21 @@ class CodexWidget(QWidget):
         self.secondary_label.setText(snapshot.secondary_text)
         self._note_display_text = _format_display_note(snapshot.note)
         self.note_label.setText(self._note_display_text)
-        self.note_label.setToolTip(snapshot.note)
+        tooltip_note = snapshot.detail or snapshot.note
+        tooltip_text = _format_panel_tooltip(snapshot, tooltip_note)
+        _set_panel_tooltip(
+            tooltip_text,
+            self.card,
+            self.status_dot,
+            self.title_label,
+            self.primary_label,
+            self.secondary_label,
+            self.note_label,
+        )
         self.note_label.setVisible(bool(snapshot.note))
         self._resize_to_content()
         self._set_tray_icon(snapshot.status)
-        self.tray.setToolTip(
-            '\n'.join(
-                part
-                for part in [
-                    snapshot.status_text,
-                    snapshot.primary_text,
-                    snapshot.secondary_text,
-                    snapshot.note,
-                ]
-                if part
-            )
-        )
+        self.tray.setToolTip(tooltip_text)
 
     def _resize_to_content(self) -> None:
         margins = self.card.layout().contentsMargins()
@@ -366,12 +380,36 @@ def _make_dot_icon(color: str) -> QIcon:
     return QIcon(pixmap)
 
 
+def _enable_inactive_tooltips(*widgets: QWidget) -> None:
+    for widget in widgets:
+        widget.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
+
+
+def _set_panel_tooltip(text: str, *widgets: QWidget) -> None:
+    for widget in widgets:
+        widget.setToolTip(text)
+
+
+def _format_panel_tooltip(snapshot: CodexSnapshot, note: str) -> str:
+    return '\n'.join(
+        part
+        for part in [
+            snapshot.status_text,
+            snapshot.primary_text,
+            snapshot.secondary_text,
+            note,
+        ]
+        if part
+    )
+
+
 def _format_display_note(note: str) -> str:
     text = ' / '.join(part.strip() for part in note.splitlines() if part.strip())
     text = (
         text.replace('hook 工作中: ', '钩子：')
         .replace('hook 闲置: ', '钩子：')
-        .replace('hook 工作状态已过期，视为闲置', '钩子状态已过期')
+        .replace('hook 工作状态已过期，视为闲置', '已自动恢复闲置')
+        .replace('hook 活跃状态已过期，视为闲置', '已自动恢复闲置')
     )
     for event_name, label in sorted(HOOK_EVENT_LABELS.items(), key=lambda item: len(item[0]), reverse=True):
         text = text.replace(event_name, label)

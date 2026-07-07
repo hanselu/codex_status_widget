@@ -48,7 +48,15 @@ def test_install_removes_old_widget_hooks(tmp_path: Path, monkeypatch) -> None: 
 
     data = json.loads(hooks_path.read_text(encoding='utf-8'))
     hooks = data['hooks']
-    assert set(hooks) == {'PostToolUse', 'UserPromptSubmit', 'Stop'}
+    assert set(hooks) == {
+        'PermissionRequest',
+        'PostToolUse',
+        'PreToolUse',
+        'Stop',
+        'SubagentStart',
+        'SubagentStop',
+        'UserPromptSubmit',
+    }
     assert hooks['PostToolUse'][0]['hooks'][0]['commandWindows'] == 'py -3 "other.py"'
     assert len(hooks['UserPromptSubmit']) == 1
     assert len(hooks['Stop']) == 1

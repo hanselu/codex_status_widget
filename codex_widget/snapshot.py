@@ -37,8 +37,12 @@ class CodexSnapshotReader:
 
         status = self._resolve_status(quota, hook_signal, now, codex_app_running)
         app_note = 'Codex App 未运行' if codex_app_running is False else ''
-        notes = _split_notes([app_note, hook_signal.note, quota.note])
+        hook_note = _visible_hook_note(hook_signal)
+        hook_detail = _visible_hook_detail(hook_signal)
+        notes = _split_notes([app_note, hook_note, quota.note])
         note = '\n'.join(_dedupe_preserve_order(notes))
+        detail_notes = _split_notes([app_note, hook_detail, quota.note])
+        detail = '\n'.join(_dedupe_preserve_order(detail_notes))
 
         return CodexSnapshot(
             status=status,
@@ -46,10 +50,11 @@ class CodexSnapshotReader:
             primary=quota.primary,
             secondary=quota.secondary,
             primary_text=f'5小时：{quota_text(quota.primary)} {format_reset_time(quota.primary.resets_at)}',
-            secondary_text=f'周额度：{quota_text(quota.secondary)} {format_reset_time(quota.secondary.resets_at, with_weekday=True)}',
+            secondary_text=f'周额度：{quota_text(quota.secondary)} {format_reset_time(quota.secondary.resets_at, with_date=True)}',
             reset_text='',
             updated_text=f'{now:%H:%M:%S}',
             note=note,
+            detail=detail,
             latest_file=quota.latest_file,
             quota_file=quota.quota_file,
             hook_signal=hook_signal,
@@ -77,8 +82,8 @@ class CodexSnapshotReader:
         ):
             return 'cooldown'
 
-        if hook_signal.status == 'working':
-            return 'working'
+        if hook_signal.status in {'waiting', 'working', 'thinking'}:
+            return hook_signal.status
         if hook_signal.status == 'idle':
             return 'idle'
 
@@ -97,7 +102,9 @@ class CodexSnapshotReader:
     def _status_text(status: StatusName) -> str:
         return {
             'idle': '闲置中',
+            'thinking': '思考中',
             'working': '工作中',
+            'waiting': '等待确认',
             'cooldown': '无额度',
             'offline': 'Codex 未运行',
         }[status]
@@ -112,6 +119,18 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
         seen.add(item)
         result.append(item)
     return result
+
+
+def _visible_hook_note(hook_signal: HookSignal) -> str:
+    if hook_signal.status == 'idle':
+        return ''
+    return hook_signal.note
+
+
+def _visible_hook_detail(hook_signal: HookSignal) -> str:
+    if hook_signal.status == 'idle':
+        return ''
+    return hook_signal.detail or hook_signal.note
 
 
 def _split_notes(items: list[str]) -> list[str]:

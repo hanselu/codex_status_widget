@@ -1,6 +1,6 @@
 # Codex 状态与额度小挂件
 
-Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的三色工作状态和订阅额度文本。
+Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的多状态指示灯和订阅额度文本。
 
 这一版把“状态”和“额度”彻底分开：
 
@@ -13,11 +13,15 @@ Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的三色�
 
 | 颜色 | 状态 | 规则 |
 |---|---|---|
-| 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有工作中的 turn |
-| 黄色 | 正在干活 | Hook 收到 `UserPromptSubmit`，且还没收到 `Stop` 或 transcript 完成记录 |
+| 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有活跃 turn |
+| 蓝色 | 思考中 | Hook 收到 `UserPromptSubmit`，且当前 turn 还未进入工具执行、权限确认或结束 |
+| 黄色 | 工作中 | Hook 收到 `PreToolUse` 或 `SubagentStart`，表示工具或子任务正在执行 |
+| 橙色 | 等待确认 | Hook 收到 `PermissionRequest`，等待用户处理权限确认 |
 | 红色 | 无额度 / Codex 未运行 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 Codex App 进程未运行 |
 
-除“无额度”会触发红灯外，额度百分比不影响黄/绿工作状态。
+多对话同时运行时，主状态灯按优先级聚合：红色异常 > 等待确认 > 工作中 > 思考中 > 闲置。小挂件正文只显示数量摘要，托盘和悬停提示显示具体对话明细。
+
+除“无额度”会触发红灯外，额度百分比不影响工作状态。
 
 ## 安装依赖
 
@@ -67,10 +71,10 @@ uv run python main.py --once
 正常时会看到类似：
 
 ```text
-状态：工作中
-5小时：剩余 71% 04:22
-周额度：剩余 46% 周五 00:18
-提示：hook 工作中: UserPromptSubmit 01:14:10
+状态：等待确认
+5小时：71% 04:22
+周额度：46% 7-12 16:23
+提示：等待 1 · 工作 2 · 思考 1
 ```
 
 ## 启动小挂件
@@ -155,10 +159,10 @@ refresh_interval_seconds = 5
 
 说明：
 
-- 只安装 `UserPromptSubmit` 和 `Stop` 两个 Hook，避免工具调用事件频繁写入状态文件。
+- 安装 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop` 和 `Stop`，用于区分思考、工作、等待确认和闲置。
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
 - `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
-- 没有 `transcript_path` 的 working 事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 Codex App 的孤儿事件长期保持黄灯。
+- 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 Codex App 的孤儿事件长期保持状态灯活跃。
 - `working_window_seconds` 只在 Hook 没安装或没被 trust 时作为回退判断使用。
 
 ## 文件说明

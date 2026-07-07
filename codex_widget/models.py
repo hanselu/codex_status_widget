@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Literal
 
 
-StatusName = Literal['idle', 'working', 'cooldown', 'offline']
-HookSignalName = Literal['idle', 'working', 'unknown']
+StatusName = Literal['idle', 'thinking', 'working', 'waiting', 'cooldown', 'offline']
+HookSignalName = Literal['idle', 'thinking', 'working', 'waiting', 'unknown']
 
 
 @dataclass(slots=True)
@@ -44,6 +44,10 @@ class HookSignal:
     cwd: str = ''
     model: str = ''
     note: str = ''
+    detail: str = ''
+    thinking_count: int = 0
+    working_count: int = 0
+    waiting_count: int = 0
     events_path: Path | None = None
 
 
@@ -58,6 +62,7 @@ class CodexSnapshot:
     reset_text: str
     updated_text: str
     note: str = ''
+    detail: str = ''
     latest_file: Path | None = None
     quota_file: Path | None = None
     hook_signal: HookSignal = field(default_factory=HookSignal)

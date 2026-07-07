@@ -258,12 +258,12 @@ def quota_text(window: QuotaWindow) -> str:
     if window.used_percent is None:
         return '未读取'
     remain = format_percent(window.remaining_percent if window.remaining_percent is not None else 0)
-    return f'剩余 {remain}'
+    return remain
 
 
 def reset_text(primary: QuotaWindow, secondary: QuotaWindow) -> str:
     primary_text = format_reset_time(primary.resets_at)
-    secondary_text = format_reset_time(secondary.resets_at, with_weekday=True)
+    secondary_text = format_reset_time(secondary.resets_at, with_date=True)
     if primary_text == '未知' and secondary_text == '未知':
         return '未知'
     return f'{primary_text} / {secondary_text}'
@@ -275,19 +275,16 @@ def format_percent(value: float) -> str:
     return f'{value:.1f}%'
 
 
-def format_reset_time(value: datetime | None, with_weekday: bool = False) -> str:
+def format_reset_time(value: datetime | None, with_date: bool = False) -> str:
     if value is None:
         return '未知'
 
     local = value.astimezone()
     now = datetime.now().astimezone()
-    if local.date() == now.date() and not with_weekday:
+    if local.date() == now.date() and not with_date:
         return local.strftime('%H:%M')
 
-    weekday = '一二三四五六日'[local.weekday()]
-    if with_weekday:
-        return f'周{weekday} {local:%H:%M}'
-    return f'{local:%m-%d %H:%M}'
+    return f'{local.month}-{local.day} {local:%H:%M}'
 
 
 def _is_token_count_event(event: dict[str, Any]) -> bool:

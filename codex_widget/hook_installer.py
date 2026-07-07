@@ -12,7 +12,7 @@ from .config import CODEX_HOOKS_PATH, CONFIG_DIR, HOOK_WRITER_PATH
 
 
 EVENTS_WITHOUT_MATCHER = ('UserPromptSubmit', 'Stop')
-EVENTS_WITH_MATCHER: tuple[str, ...] = ()
+EVENTS_WITH_MATCHER = ('PermissionRequest', 'PreToolUse', 'PostToolUse', 'SubagentStart', 'SubagentStop')
 WIDGET_MARKER = 'codex_widget/hook_writer'
 STATUS_MESSAGE = 'Codex Widget: record status'
 

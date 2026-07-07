@@ -9,17 +9,26 @@ from typing import Any
 from .models import HookSignal, HookSignalName
 
 
-WORKING_EVENTS = {
+THINKING_EVENTS = {
     'UserPromptSubmit',
+}
+
+WORKING_EVENTS = {
+    'PreToolUse',
+    'SubagentStart',
+}
+
+WAITING_EVENTS = {
+    'PermissionRequest',
+}
+
+BACK_TO_THINKING_EVENTS = {
+    'PostToolUse',
+    'SubagentStop',
 }
 
 NEUTRAL_EVENTS = {
     'SessionStart',
-    'PreToolUse',
-    'PostToolUse',
-    'PermissionRequest',
-    'SubagentStart',
-    'SubagentStop',
     'PreCompact',
     'PostCompact',
 }
@@ -36,6 +45,8 @@ TRANSCRIPT_FINISHED_EVENTS = {
 
 TRANSCRIPTLESS_STALE_AFTER_MINUTES = 10
 MAX_TRANSCRIPT_BYTES_TO_READ = 512 * 1024
+ACTIVE_STATUS_PRIORITY = ('waiting', 'working', 'thinking')
+ACTIVE_STATUSES = set(ACTIVE_STATUS_PRIORITY)
 
 
 @dataclass(slots=True)
@@ -48,6 +59,7 @@ class _SessionState:
     cwd: str = ''
     model: str = ''
     transcript_path: str = ''
+    tool_name: str = ''
     note: str = ''
 
 
@@ -84,31 +96,31 @@ class HookStateReader:
             else:
                 session_id = _as_str(event.get('session_id')) or '__global__'
 
-            state = sessions.setdefault(session_id, _SessionState(session_id=session_id))
+            state_key = _state_key(event)
+            state = sessions.setdefault(state_key, _SessionState(session_id=session_id))
             self._apply_event(state, event)
 
         now = datetime.now(timezone.utc)
         self._apply_transcript_completion(sessions)
-        _expire_transcriptless_working_states(sessions, now)
+        _expire_transcriptless_active_states(sessions, now)
 
         stale_cutoff = now - timedelta(minutes=self.stale_after_minutes)
 
-        working_states = [
+        active_states = [
             state
             for state in sessions.values()
-            if state.status == 'working'
+            if state.status in ACTIVE_STATUSES
             and state.last_event_at is not None
             and state.last_event_at >= stale_cutoff
         ]
-        if working_states:
-            state = max(working_states, key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc))
-            return _signal_from_state('working', state, 'hook 工作中', self.events_path)
+        if active_states:
+            return _signal_from_active_states(active_states, self.events_path)
 
-        # If there is a working state but it is stale, treat as idle and say why.
-        stale_working_states = [state for state in sessions.values() if state.status == 'working']
-        if stale_working_states:
+        # If there is an active state but it is stale, treat as idle and say why.
+        stale_active_states = [state for state in sessions.values() if state.status in ACTIVE_STATUSES]
+        if stale_active_states:
             state = max(
-                stale_working_states,
+                stale_active_states,
                 key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc),
             )
             return HookSignal(
@@ -119,7 +131,7 @@ class HookStateReader:
                 turn_id=state.turn_id,
                 cwd=state.cwd,
                 model=state.model,
-                note='hook 工作状态已过期，视为闲置',
+                note='旧活跃状态已自动恢复闲置',
                 events_path=self.events_path,
             )
 
@@ -192,7 +204,7 @@ class HookStateReader:
     def _apply_event(self, state: _SessionState, event: dict[str, Any]) -> None:
         event_name = _as_str(event.get('hook_event_name'))
         event_at = _parse_datetime(event.get('recorded_at'))
-        should_record_lifecycle = event_name not in NEUTRAL_EVENTS or state.status != 'working'
+        should_record_lifecycle = event_name not in NEUTRAL_EVENTS or state.status not in ACTIVE_STATUSES
 
         if event_at is not None and should_record_lifecycle:
             state.last_event_at = event_at
@@ -202,9 +214,25 @@ class HookStateReader:
         state.cwd = _as_str(event.get('cwd')) or state.cwd
         state.model = _as_str(event.get('model')) or state.model
         state.transcript_path = _as_str(event.get('transcript_path')) or state.transcript_path
+        state.tool_name = _as_str(event.get('tool_name')) or state.tool_name
 
+        if event_name in THINKING_EVENTS:
+            state.status = 'thinking'
+            state.note = ''
+            return
+        if event_name in WAITING_EVENTS:
+            state.status = 'waiting'
+            state.note = ''
+            return
         if event_name in WORKING_EVENTS:
             state.status = 'working'
+            state.note = ''
+            return
+        if event_name in BACK_TO_THINKING_EVENTS:
+            if state.status in ACTIVE_STATUSES:
+                state.status = 'thinking'
+            else:
+                state.status = 'idle'
             state.note = ''
             return
         if event_name in IDLE_EVENTS:
@@ -213,13 +241,13 @@ class HookStateReader:
             state.note = ''
             return
         if event_name in NEUTRAL_EVENTS:
-            if state.status != 'working':
+            if state.status not in ACTIVE_STATUSES:
                 state.status = 'idle'
             return
 
     def _apply_transcript_completion(self, sessions: dict[str, _SessionState]) -> None:
         for state in sessions.values():
-            if state.status != 'working' or not state.transcript_path or not state.turn_id:
+            if state.status not in ACTIVE_STATUSES or not state.transcript_path or not state.turn_id:
                 continue
             completed_at = _read_task_finished_at(Path(state.transcript_path), state.turn_id)
             if completed_at is None:
@@ -247,18 +275,109 @@ def _signal_from_state(
     )
 
 
-def _expire_transcriptless_working_states(sessions: dict[str, _SessionState], now: datetime) -> None:
+def _state_key(event: dict[str, Any]) -> str:
+    session_id = _as_str(event.get('session_id')) or '__global__'
+    turn_id = _as_str(event.get('turn_id')) or '__turn__'
+    return f'{session_id}:{turn_id}'
+
+
+def _signal_from_active_states(active_states: list[_SessionState], events_path: Path) -> HookSignal:
+    counts = _active_counts(active_states)
+    status = _aggregate_status(counts)
+    states_for_status = [state for state in active_states if state.status == status]
+    state = max(states_for_status, key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc))
+    return HookSignal(
+        status=status,
+        last_event_name=state.last_event_name,
+        last_event_at=state.last_event_at,
+        session_id=state.session_id if state.session_id != '__global__' else '',
+        turn_id=state.turn_id,
+        cwd=state.cwd,
+        model=state.model,
+        note=_format_active_summary(counts),
+        detail=_format_active_detail(active_states),
+        thinking_count=counts['thinking'],
+        working_count=counts['working'],
+        waiting_count=counts['waiting'],
+        events_path=events_path,
+    )
+
+
+def _active_counts(states: list[_SessionState]) -> dict[str, int]:
+    return {status: sum(1 for state in states if state.status == status) for status in ACTIVE_STATUS_PRIORITY}
+
+
+def _aggregate_status(counts: dict[str, int]) -> HookSignalName:
+    for status in ACTIVE_STATUS_PRIORITY:
+        if counts[status]:
+            return status  # type: ignore[return-value]
+    return 'idle'
+
+
+def _format_active_summary(counts: dict[str, int]) -> str:
+    parts = []
+    if counts['waiting']:
+        parts.append(f'等待 {counts["waiting"]}')
+    if counts['working']:
+        parts.append(f'工作 {counts["working"]}')
+    if counts['thinking']:
+        parts.append(f'思考 {counts["thinking"]}')
+    return ' · '.join(parts)
+
+
+def _format_active_detail(states: list[_SessionState]) -> str:
+    title_by_status = {
+        'waiting': '等待确认',
+        'working': '工作中',
+        'thinking': '思考中',
+    }
+    lines: list[str] = []
+    for status in ACTIVE_STATUS_PRIORITY:
+        status_states = [state for state in states if state.status == status]
+        if not status_states:
+            continue
+        if lines:
+            lines.append('')
+        lines.append(f'{title_by_status[status]} {len(status_states)}')
+        for state in sorted(
+            status_states,
+            key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        ):
+            lines.append(_format_state_detail(state))
+    return '\n'.join(lines)
+
+
+def _format_state_detail(state: _SessionState) -> str:
+    label = _state_label(state)
+    parts = [label]
+    if state.last_event_at is not None:
+        parts.append(f'{state.last_event_at.astimezone():%H:%M:%S}')
+    if state.tool_name:
+        parts.append(state.tool_name)
+    return '- ' + ' · '.join(parts)
+
+
+def _state_label(state: _SessionState) -> str:
+    if state.cwd:
+        return Path(state.cwd).name or state.cwd
+    if state.session_id:
+        return state.session_id[:8]
+    return '未知对话'
+
+
+def _expire_transcriptless_active_states(sessions: dict[str, _SessionState], now: datetime) -> None:
     cutoff = now - timedelta(minutes=TRANSCRIPTLESS_STALE_AFTER_MINUTES)
     for state in sessions.values():
         if (
-            state.status == 'working'
+            state.status in ACTIVE_STATUSES
             and not state.transcript_path
             and state.last_event_at is not None
             and state.last_event_at < cutoff
         ):
             state.status = 'idle'
-            state.last_event_name = 'UserPromptSubmitExpired'
-            state.note = '无 transcript 的 hook 工作状态已过期，视为闲置'
+            state.last_event_name = f'{state.last_event_name}Expired' if state.last_event_name else 'ActiveExpired'
+            state.note = '无 transcript 的旧活跃状态已自动恢复闲置'
 
 
 def _read_task_finished_at(transcript_path: Path, turn_id: str) -> datetime | None:
