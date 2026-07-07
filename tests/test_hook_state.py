@@ -157,6 +157,31 @@ def test_waiting_has_priority_over_working_and_thinking(tmp_path: Path) -> None:
     assert '- C' in signal.detail
 
 
+def test_same_session_new_prompt_replaces_previous_turn(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit', session_id='s1', turn_id='t1')
+    _append(events, hook_event_name='UserPromptSubmit', session_id='s1', turn_id='t2')
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'thinking'
+    assert signal.thinking_count == 1
+    assert signal.turn_id == 't2'
+
+
+def test_same_session_stop_clears_previous_unfinished_turn(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit', session_id='s1', turn_id='t1')
+    _append(events, hook_event_name='UserPromptSubmit', session_id='s1', turn_id='t2')
+    _append(events, hook_event_name='Stop', session_id='s1', turn_id='t2')
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'idle'
+    assert signal.last_event_name == 'Stop'
+    assert signal.turn_id == 't2'
+
+
 def test_long_thinking_stays_active_until_stale_cutoff(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     transcript = tmp_path / 'rollout.jsonl'

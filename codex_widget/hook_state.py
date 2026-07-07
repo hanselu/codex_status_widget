@@ -277,8 +277,9 @@ def _signal_from_state(
 
 def _state_key(event: dict[str, Any]) -> str:
     session_id = _as_str(event.get('session_id')) or '__global__'
-    turn_id = _as_str(event.get('turn_id')) or '__turn__'
-    return f'{session_id}:{turn_id}'
+    # A visible conversation maps to one session. Subagent or interrupted turns can
+    # miss Stop, so newer events in the same session should supersede older turns.
+    return session_id
 
 
 def _signal_from_active_states(active_states: list[_SessionState], events_path: Path) -> HookSignal:
