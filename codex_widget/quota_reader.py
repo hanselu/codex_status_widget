@@ -8,6 +8,7 @@ import re
 import sqlite3
 from typing import Any
 
+from .config import CONFIG_DIR
 from .models import QuotaSnapshot, QuotaWindow
 
 
@@ -44,6 +45,7 @@ MESSAGE_KEYS = {
 }
 
 LOG_ROWS_TO_SCAN = 2000
+QUOTA_CACHE_PATH = CONFIG_DIR / 'quota_cache.json'
 # Codex writes separate token_count pools. The desktop quota widget should show
 # the general Codex pool, not model-specific pools such as Codex-Spark.
 PREFERRED_LIMIT_ID = 'codex'
@@ -58,10 +60,12 @@ class CodexQuotaReader:
     files; that is handled by hook_state.py.
     """
 
-    def __init__(self, sessions_dir: Path) -> None:
+    def __init__(self, sessions_dir: Path, cache_path: Path | None = None) -> None:
         self.sessions_dir = Path(sessions_dir).expanduser()
+        self.cache_path = Path(cache_path).expanduser() if cache_path is not None else QUOTA_CACHE_PATH
         self._last_quota_event: dict[str, Any] | None = None
         self._last_quota_file: Path | None = None
+        self._last_quota_account_id: str | None = None
 
     def read_quota(self) -> QuotaSnapshot:
         latest_file = self._find_latest_jsonl()
@@ -73,7 +77,9 @@ class CodexQuotaReader:
             )
 
         event, quota_file, note = self._find_latest_logged_rate_limits()
-        if event is None:
+        if event is not None:
+            self._remember_quota(event, quota_file, self._auth_account_id())
+        else:
             event, quota_file, note = self._find_quota_event_with_fallback(latest_file)
 
         primary, secondary = self._extract_quota(event)
@@ -118,13 +124,16 @@ class CodexQuotaReader:
         self, latest_file: Path
     ) -> tuple[dict[str, Any] | None, Path | None, str]:
         auth_mtime = self._auth_state_mtime()
+        account_id = self._auth_account_id()
         if _file_is_older_than(latest_file, auth_mtime):
+            cached = self._reusable_quota(account_id)
+            if cached is not None:
+                return cached[0], cached[1], '额度沿用上次读取'
             return None, None, '未读取到当前账号 token_count'
 
         latest_event = self._find_latest_token_count(latest_file, preferred_only=True)
         if latest_event is not None:
-            self._last_quota_event = latest_event
-            self._last_quota_file = latest_file
+            self._remember_quota(latest_event, latest_file, account_id)
             return latest_event, latest_file, ''
 
         latest_any_event = self._find_latest_token_count(latest_file, preferred_only=False)
@@ -147,19 +156,23 @@ class CodexQuotaReader:
                         fallback_file = path
                 continue
 
-            self._last_quota_event = event
-            self._last_quota_file = path
+            self._remember_quota(event, path, account_id)
             return event, path, '额度来自最近记录'
 
         if fallback_event is not None:
-            self._last_quota_event = fallback_event
-            self._last_quota_file = fallback_file
+            self._remember_quota(fallback_event, fallback_file, account_id)
             return fallback_event, fallback_file, '未读取到主额度，显示其他额度池'
 
         if self._last_quota_event is not None:
-            if _file_is_older_than(self._last_quota_file, auth_mtime):
+            if _file_is_older_than(self._last_quota_file, auth_mtime) and not self._can_reuse_last_quota(
+                account_id
+            ):
                 return None, None, '未读取到当前账号 token_count'
             return self._last_quota_event, self._last_quota_file, '额度沿用上次读取'
+
+        cached = self._reusable_quota(account_id)
+        if cached is not None:
+            return cached[0], cached[1], '额度沿用上次读取'
 
         if skipped_pre_auth_session:
             return None, None, '未读取到当前账号 token_count'
@@ -172,6 +185,91 @@ class CodexQuotaReader:
             return auth_path.stat().st_mtime
         except OSError:
             return None
+
+    def _auth_account_id(self) -> str | None:
+        auth_path = self.sessions_dir.parent / 'auth.json'
+        try:
+            data = json.loads(auth_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+        tokens = data.get('tokens') if isinstance(data, dict) else None
+        if not isinstance(tokens, dict):
+            return None
+
+        account_id = tokens.get('account_id')
+        return account_id.strip() if isinstance(account_id, str) and account_id.strip() else None
+
+    def _remember_quota(
+        self, event: dict[str, Any], quota_file: Path | None, account_id: str | None
+    ) -> None:
+        self._last_quota_event = event
+        self._last_quota_file = quota_file
+        self._last_quota_account_id = account_id
+        self._write_quota_cache(event, quota_file, account_id)
+
+    def _can_reuse_last_quota(self, account_id: str | None) -> bool:
+        return (
+            self._last_quota_event is not None
+            and account_id is not None
+            and account_id == self._last_quota_account_id
+        )
+
+    def _reusable_quota(self, account_id: str | None) -> tuple[dict[str, Any], Path | None] | None:
+        if self._can_reuse_last_quota(account_id) and self._last_quota_event is not None:
+            return self._last_quota_event, self._last_quota_file
+
+        cached = self._read_quota_cache(account_id)
+        if cached is None:
+            return None
+
+        event, quota_file = cached
+        self._last_quota_event = event
+        self._last_quota_file = quota_file
+        self._last_quota_account_id = account_id
+        return event, quota_file
+
+    def _write_quota_cache(
+        self, event: dict[str, Any], quota_file: Path | None, account_id: str | None
+    ) -> None:
+        if account_id is None:
+            return
+
+        cache_event = _cacheable_quota_event(event)
+        if cache_event is None:
+            return
+
+        data = {
+            'version': 1,
+            'account_id': account_id,
+            'quota_file': str(quota_file) if quota_file is not None else '',
+            'event': cache_event,
+        }
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self.cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            return
+
+    def _read_quota_cache(self, account_id: str | None) -> tuple[dict[str, Any], Path | None] | None:
+        if account_id is None:
+            return None
+
+        try:
+            data = json.loads(self.cache_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+        if not isinstance(data, dict) or data.get('account_id') != account_id:
+            return None
+
+        event = data.get('event')
+        if not isinstance(event, dict) or _extract_rate_limits(event) is None:
+            return None
+
+        quota_file_raw = data.get('quota_file')
+        quota_file = Path(quota_file_raw) if isinstance(quota_file_raw, str) and quota_file_raw else None
+        return event, quota_file
 
     def _find_latest_logged_rate_limits(self) -> tuple[dict[str, Any] | None, Path | None, str]:
         auth_mtime = self._auth_state_mtime()
@@ -393,6 +491,20 @@ def _extract_rate_limits(event: dict[str, Any] | None) -> dict[str, Any] | None:
     payload = event.get('payload') if isinstance(event.get('payload'), dict) else event
     rate_limits = payload.get('rate_limits') if isinstance(payload, dict) else None
     return rate_limits if isinstance(rate_limits, dict) else None
+
+
+def _cacheable_quota_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    rate_limits = _extract_rate_limits(event)
+    if rate_limits is None:
+        return None
+
+    cached = {
+        'type': 'token_count',
+        'rate_limits': rate_limits,
+    }
+    if isinstance(event.get('_quota_source'), str):
+        cached['_quota_source'] = event['_quota_source']
+    return cached
 
 
 def _quota_limit_id(event: dict[str, Any] | None) -> str:

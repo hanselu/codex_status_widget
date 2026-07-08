@@ -14,6 +14,11 @@ def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.write_text('\n'.join(json.dumps(event) for event in events) + '\n', encoding='utf-8')
 
 
+def _write_auth(path: Path, account_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'tokens': {'account_id': account_id}}), encoding='utf-8')
+
+
 def _write_logs_db(path: Path, bodies: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
@@ -247,6 +252,153 @@ def test_logged_limit_reached_sets_signal(tmp_path: Path) -> None:
     snap = CodexQuotaReader(sessions).read_quota()
 
     assert snap.has_limit_signal is True
+
+
+def test_reuses_logged_rate_limits_after_same_account_auth_refresh(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'current-account.jsonl'
+    logs = codex_home / 'logs_2.sqlite'
+    auth = codex_home / 'auth.json'
+    _write_auth(auth, 'account-a')
+    _write_jsonl(session, [{'payload': {'type': 'task_started'}}])
+    _write_logs_db(
+        logs,
+        [
+            'websocket event: '
+            + json.dumps(
+                {
+                    'type': 'codex.rate_limits',
+                    'rate_limits': {
+                        'allowed': True,
+                        'limit_reached': False,
+                        'primary': {'used_percent': 44, 'reset_at': 1781813603, 'window_minutes': 300},
+                        'secondary': {'used_percent': 55, 'reset_at': 1782363500, 'window_minutes': 10080},
+                    },
+                }
+            )
+        ],
+    )
+    os.utime(auth, (1000, 1000))
+    os.utime(session, (1500, 1500))
+    os.utime(logs, (1500, 1500))
+    reader = CodexQuotaReader(sessions, tmp_path / 'quota_cache.json')
+
+    first = reader.read_quota()
+    assert first.primary.used_percent == 44
+    assert first.quota_file == logs
+
+    _write_auth(auth, 'account-a')
+    os.utime(auth, (2000, 2000))
+
+    second = reader.read_quota()
+
+    assert second.primary.used_percent == 44
+    assert second.secondary.used_percent == 55
+    assert second.note == '额度沿用上次读取'
+    assert second.quota_file == logs
+
+
+def test_reuses_last_quota_after_same_account_auth_refresh(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'current-account.jsonl'
+    auth = codex_home / 'auth.json'
+    _write_auth(auth, 'account-a')
+    _write_jsonl(session, [_token_count(42, 58)])
+    os.utime(auth, (1000, 1000))
+    os.utime(session, (1500, 1500))
+    reader = CodexQuotaReader(sessions, tmp_path / 'quota_cache.json')
+
+    first = reader.read_quota()
+    assert first.primary.used_percent == 42
+    assert first.note == ''
+
+    _write_auth(auth, 'account-a')
+    os.utime(auth, (2000, 2000))
+
+    second = reader.read_quota()
+
+    assert second.primary.used_percent == 42
+    assert second.secondary.used_percent == 58
+    assert second.note == '额度沿用上次读取'
+    assert second.quota_file == session
+
+
+def test_does_not_reuse_last_quota_after_account_change(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'old-account.jsonl'
+    auth = codex_home / 'auth.json'
+    _write_auth(auth, 'account-a')
+    _write_jsonl(session, [_token_count(42, 58)])
+    os.utime(auth, (1000, 1000))
+    os.utime(session, (1500, 1500))
+    reader = CodexQuotaReader(sessions, tmp_path / 'quota_cache.json')
+
+    first = reader.read_quota()
+    assert first.primary.used_percent == 42
+
+    _write_auth(auth, 'account-b')
+    os.utime(auth, (2000, 2000))
+
+    second = reader.read_quota()
+
+    assert second.primary.used_percent is None
+    assert second.secondary.used_percent is None
+    assert second.note == '未读取到当前账号 token_count'
+    assert second.quota_file is None
+
+
+def test_reuses_persisted_quota_cache_after_same_account_auth_refresh(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'current-account.jsonl'
+    auth = codex_home / 'auth.json'
+    cache = tmp_path / 'quota_cache.json'
+    _write_auth(auth, 'account-a')
+    _write_jsonl(session, [_token_count(42, 58)])
+    os.utime(auth, (1000, 1000))
+    os.utime(session, (1500, 1500))
+
+    first = CodexQuotaReader(sessions, cache).read_quota()
+    assert first.primary.used_percent == 42
+    assert cache.exists()
+
+    _write_auth(auth, 'account-a')
+    os.utime(auth, (2000, 2000))
+
+    second = CodexQuotaReader(sessions, cache).read_quota()
+
+    assert second.primary.used_percent == 42
+    assert second.secondary.used_percent == 58
+    assert second.note == '额度沿用上次读取'
+    assert second.quota_file == session
+
+
+def test_does_not_reuse_persisted_quota_cache_after_account_change(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'old-account.jsonl'
+    auth = codex_home / 'auth.json'
+    cache = tmp_path / 'quota_cache.json'
+    _write_auth(auth, 'account-a')
+    _write_jsonl(session, [_token_count(42, 58)])
+    os.utime(auth, (1000, 1000))
+    os.utime(session, (1500, 1500))
+
+    first = CodexQuotaReader(sessions, cache).read_quota()
+    assert first.primary.used_percent == 42
+
+    _write_auth(auth, 'account-b')
+    os.utime(auth, (2000, 2000))
+
+    second = CodexQuotaReader(sessions, cache).read_quota()
+
+    assert second.primary.used_percent is None
+    assert second.secondary.used_percent is None
+    assert second.note == '未读取到当前账号 token_count'
+    assert second.quota_file is None
 
 
 def test_does_not_fall_back_before_auth_refresh(tmp_path: Path) -> None:

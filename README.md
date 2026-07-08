@@ -104,6 +104,7 @@ uv run --with pyinstaller pyinstaller --noconfirm codex_status_widget.spec
 - 添加钩子到 Codex
 - 打开 sessions 目录
 - 打开状态目录
+- 版本：当前版本号
 - 退出
 
 `标记为闲置` 用于 Codex 崩溃、Hook 没有收到 `Stop`、或者你手动想把黄灯重置为绿灯的情况。

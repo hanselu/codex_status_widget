@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .config import CONFIG_DIR, AppConfig
 from .codex_app import codex_app_is_running
 from .hook_installer import install_hooks, read_hook_setup_status
@@ -183,6 +184,10 @@ class CodexWidget(QWidget):
         self.menu.addAction(self.open_state_action)
 
         self.menu.addSeparator()
+
+        self.version_action = QAction(_version_menu_text(), self)
+        self.version_action.setEnabled(False)
+        self.menu.addAction(self.version_action)
 
         self.quit_action = QAction('退出', self)
         self.quit_action.triggered.connect(QApplication.quit)
@@ -378,6 +383,10 @@ def _make_dot_icon(color: str) -> QIcon:
     painter.drawEllipse(5, 5, 22, 22)
     painter.end()
     return QIcon(pixmap)
+
+
+def _version_menu_text() -> str:
+    return f'版本：{__version__}'
 
 
 def _enable_inactive_tooltips(*widgets: QWidget) -> None:

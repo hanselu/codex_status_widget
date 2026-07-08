@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
-from codex_widget.ui import _enable_inactive_tooltips, _format_display_note
+from codex_widget import __version__
+from codex_widget.ui import _enable_inactive_tooltips, _format_display_note, _version_menu_text
 
 
 class _DummyWidget:
@@ -37,3 +38,7 @@ def test_enable_inactive_tooltips_sets_qt_attribute() -> None:
     _enable_inactive_tooltips(widget)
 
     assert widget.attributes == [(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)]
+
+
+def test_version_menu_text_uses_package_version() -> None:
+    assert _version_menu_text() == f'版本：{__version__}'
