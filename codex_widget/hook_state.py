@@ -222,7 +222,7 @@ class HookStateReader:
             state.note = ''
             return
         if event_name in BACK_TO_WORKING_EVENTS:
-            if state.status in ACTIVE_STATUSES:
+            if state.status in ACTIVE_STATUSES and state.transcript_path:
                 state.status = 'working'
             else:
                 state.status = 'idle'

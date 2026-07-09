@@ -116,13 +116,26 @@ def test_pre_tool_use_keeps_working_lifecycle_event(tmp_path: Path) -> None:
 
 def test_post_tool_use_stays_working(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
-    _append(events, hook_event_name='UserPromptSubmit')
+    transcript = tmp_path / 'rollout.jsonl'
+    transcript.write_text('', encoding='utf-8')
+    _append(events, hook_event_name='UserPromptSubmit', transcript_path=str(transcript))
     _append(events, hook_event_name='PreToolUse')
     _append(events, hook_event_name='PostToolUse')
 
     signal = HookStateReader(events).read_signal()
 
     assert signal.status == 'working'
+    assert signal.last_event_name == 'PostToolUse'
+
+
+def test_transcriptless_post_tool_use_sets_idle(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='PreToolUse')
+    _append(events, hook_event_name='PostToolUse')
+
+    signal = HookStateReader(events).read_signal()
+
+    assert signal.status == 'idle'
     assert signal.last_event_name == 'PostToolUse'
 
 
