@@ -259,7 +259,7 @@ def test_transcript_completion_for_other_turn_stays_working(tmp_path: Path) -> N
 
 def test_transcriptless_working_expires_quickly(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
-    old = datetime.now(timezone.utc) - timedelta(minutes=11)
+    old = datetime.now(timezone.utc) - timedelta(seconds=31)
     _append(events, hook_event_name='UserPromptSubmit', recorded_at=old.isoformat())
 
     signal = HookStateReader(events, stale_after_minutes=360).read_signal()

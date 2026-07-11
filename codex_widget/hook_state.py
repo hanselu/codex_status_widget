@@ -40,7 +40,7 @@ TRANSCRIPT_FINISHED_EVENTS = {
     'turn_aborted',
 }
 
-TRANSCRIPTLESS_STALE_AFTER_MINUTES = 10
+TRANSCRIPTLESS_STALE_AFTER_SECONDS = 30
 MAX_TRANSCRIPT_BYTES_TO_READ = 512 * 1024
 ACTIVE_STATUS_PRIORITY = ('waiting', 'working')
 ACTIVE_STATUSES = set(ACTIVE_STATUS_PRIORITY)
@@ -357,7 +357,7 @@ def _state_label(state: _SessionState) -> str:
 
 
 def _expire_transcriptless_active_states(sessions: dict[str, _SessionState], now: datetime) -> None:
-    cutoff = now - timedelta(minutes=TRANSCRIPTLESS_STALE_AFTER_MINUTES)
+    cutoff = now - timedelta(seconds=TRANSCRIPTLESS_STALE_AFTER_SECONDS)
     for state in sessions.values():
         if (
             state.status in ACTIVE_STATUSES

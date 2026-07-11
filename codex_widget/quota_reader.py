@@ -299,6 +299,7 @@ class CodexQuotaReader:
         ]
 
     def _find_latest_token_count(self, path: Path, *, preferred_only: bool) -> dict[str, Any] | None:
+        latest_all_zero_event: dict[str, Any] | None = None
         for line in _iter_lines_reversed(path, max_lines=2000):
             event = _loads_json_line(line)
             if not isinstance(event, dict):
@@ -306,8 +307,11 @@ class CodexQuotaReader:
             if _is_token_count_event(event):
                 if preferred_only and not _is_preferred_quota_event(event):
                     continue
+                if _is_all_zero_quota_event(event):
+                    latest_all_zero_event = latest_all_zero_event or event
+                    continue
                 return event
-        return None
+        return latest_all_zero_event
 
     def _extract_quota(self, event: dict[str, Any] | None) -> tuple[QuotaWindow, QuotaWindow]:
         if not event:
@@ -520,6 +524,17 @@ def _is_preferred_quota_event(event: dict[str, Any]) -> bool:
     return limit_id in {'', PREFERRED_LIMIT_ID}
 
 
+def _is_all_zero_quota_event(event: dict[str, Any]) -> bool:
+    rate_limits = _extract_rate_limits(event)
+    if rate_limits is None:
+        return False
+
+    primary = _parse_quota_window(rate_limits.get('primary'))
+    secondary = _parse_quota_window(rate_limits.get('secondary'))
+    values = (primary.used_percent, secondary.used_percent)
+    return all(value is not None and abs(value) < 0.05 for value in values)
+
+
 def _rate_limit_reached(event: dict[str, Any] | None) -> bool:
     rate_limits = _extract_rate_limits(event)
     if rate_limits is None:
@@ -552,6 +567,7 @@ def _read_latest_logged_rate_limits(path: Path) -> tuple[dict[str, Any], float |
     finally:
         con.close()
 
+    latest_all_zero_result: tuple[dict[str, Any], float | None] | None = None
     for row_ts, body in rows:
         if not isinstance(body, str) or 'codex.rate_limits' not in body:
             continue
@@ -561,16 +577,24 @@ def _read_latest_logged_rate_limits(path: Path) -> tuple[dict[str, Any], float |
         rate_limits = event.get('rate_limits')
         if not isinstance(rate_limits, dict):
             continue
+        rate_limits = dict(rate_limits)
+        for key in ('limit_id', 'limit_name', 'plan_type', 'rate_limit_reached_type'):
+            if key not in rate_limits and key in event:
+                rate_limits[key] = event[key]
         quota_event = {
             'type': 'token_count',
             'rate_limits': rate_limits,
             '_quota_source': 'codex.rate_limits',
         }
         result = quota_event, _as_float(row_ts)
-        if _is_preferred_quota_event(quota_event):
-            return result
+        if not _is_preferred_quota_event(quota_event):
+            continue
+        if _is_all_zero_quota_event(quota_event):
+            latest_all_zero_result = latest_all_zero_result or result
+            continue
+        return result
 
-    return None
+    return latest_all_zero_result
 
 
 def _parse_logged_websocket_event(body: str) -> dict[str, Any] | None:

@@ -126,6 +126,26 @@ def test_prefers_recent_general_codex_limit_over_latest_spark_session(tmp_path: 
     assert snap.quota_file == old
 
 
+def test_skips_transient_all_zero_token_count_when_recent_real_quota_exists(tmp_path: Path) -> None:
+    path = tmp_path / 'sessions' / 'a.jsonl'
+    _write_jsonl(path, [_token_count(79, 31, limit_id='codex'), _token_count(0, 0, limit_id='codex')])
+
+    snap = CodexQuotaReader(tmp_path / 'sessions').read_quota()
+
+    assert snap.primary.used_percent == 79
+    assert snap.secondary.used_percent == 31
+
+
+def test_all_zero_token_count_is_allowed_when_it_is_the_only_quota(tmp_path: Path) -> None:
+    path = tmp_path / 'sessions' / 'a.jsonl'
+    _write_jsonl(path, [_token_count(0, 0, limit_id='codex')])
+
+    snap = CodexQuotaReader(tmp_path / 'sessions').read_quota()
+
+    assert snap.primary.used_percent == 0
+    assert snap.secondary.used_percent == 0
+
+
 def test_prefers_logged_rate_limits(tmp_path: Path) -> None:
     codex_home = tmp_path / '.codex'
     sessions = codex_home / 'sessions'
@@ -223,6 +243,83 @@ def test_ignores_spark_logged_rate_limits_when_session_has_general_limit(tmp_pat
     assert snap.primary.used_percent == 12
     assert snap.secondary.used_percent == 34
     assert snap.quota_file == session
+
+
+def test_ignores_top_level_spark_logged_rate_limits_when_session_has_general_limit(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'a.jsonl'
+    logs = codex_home / 'logs_2.sqlite'
+    _write_jsonl(session, [_token_count(12, 34, limit_id='codex')])
+    _write_logs_db(
+        logs,
+        [
+            'Received message '
+            + json.dumps(
+                {
+                    'type': 'codex.rate_limits',
+                    'limit_id': 'codex_bengalfox',
+                    'rate_limits': {
+                        'allowed': True,
+                        'limit_reached': False,
+                        'primary': {'used_percent': 0, 'reset_at': 1781813603, 'window_minutes': 300},
+                        'secondary': {'used_percent': 0, 'reset_at': 1782363500, 'window_minutes': 10080},
+                    },
+                }
+            )
+        ],
+    )
+
+    snap = CodexQuotaReader(sessions).read_quota()
+
+    assert snap.primary.used_percent == 12
+    assert snap.secondary.used_percent == 34
+    assert snap.quota_file == session
+
+
+def test_skips_transient_all_zero_logged_rate_limits(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'a.jsonl'
+    logs = codex_home / 'logs_2.sqlite'
+    _write_jsonl(session, [_token_count(12, 34, limit_name='session')])
+    _write_logs_db(
+        logs,
+        [
+            'Received message '
+            + json.dumps(
+                {
+                    'type': 'codex.rate_limits',
+                    'rate_limits': {
+                        'allowed': True,
+                        'limit_reached': False,
+                        'limit_id': 'codex',
+                        'primary': {'used_percent': 79, 'reset_at': 1781813603, 'window_minutes': 300},
+                        'secondary': {'used_percent': 31, 'reset_at': 1782363500, 'window_minutes': 10080},
+                    },
+                }
+            ),
+            'Received message '
+            + json.dumps(
+                {
+                    'type': 'codex.rate_limits',
+                    'rate_limits': {
+                        'allowed': True,
+                        'limit_reached': False,
+                        'limit_id': 'codex',
+                        'primary': {'used_percent': 0, 'reset_at': 1781813603, 'window_minutes': 300},
+                        'secondary': {'used_percent': 0, 'reset_at': 1782363500, 'window_minutes': 10080},
+                    },
+                }
+            ),
+        ],
+    )
+
+    snap = CodexQuotaReader(sessions).read_quota()
+
+    assert snap.primary.used_percent == 79
+    assert snap.secondary.used_percent == 31
+    assert snap.quota_file == logs
 
 
 def test_logged_limit_reached_sets_signal(tmp_path: Path) -> None:
