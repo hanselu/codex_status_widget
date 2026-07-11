@@ -76,11 +76,19 @@ class CodexQuotaReader:
                 note=f'未找到 session 文件：{self.sessions_dir}',
             )
 
-        event, quota_file, note = self._find_latest_logged_rate_limits()
+        logged_event, logged_file, logged_note, logged_ts = self._find_latest_logged_rate_limits()
+        session_event, session_file, session_note = self._find_quota_event_with_fallback(latest_file)
+        event, quota_file, note = _select_latest_quota_result(
+            (logged_event, logged_file, logged_note, logged_ts),
+            (
+                session_event,
+                session_file,
+                session_note,
+                _quota_event_timestamp(session_event, session_file),
+            ),
+        )
         if event is not None:
             self._remember_quota(event, quota_file, self._auth_account_id())
-        else:
-            event, quota_file, note = self._find_quota_event_with_fallback(latest_file)
 
         primary, secondary = self._extract_quota(event)
         quota_source = _quota_source_text(event)
@@ -271,7 +279,7 @@ class CodexQuotaReader:
         quota_file = Path(quota_file_raw) if isinstance(quota_file_raw, str) and quota_file_raw else None
         return event, quota_file
 
-    def _find_latest_logged_rate_limits(self) -> tuple[dict[str, Any] | None, Path | None, str]:
+    def _find_latest_logged_rate_limits(self) -> tuple[dict[str, Any] | None, Path | None, str, float | None]:
         auth_mtime = self._auth_state_mtime()
         latest: tuple[float, dict[str, Any], Path] | None = None
         for path in self._log_db_paths():
@@ -288,8 +296,8 @@ class CodexQuotaReader:
                 latest = (sort_ts, event, path)
 
         if latest is None:
-            return None, None, ''
-        return latest[1], latest[2], ''
+            return None, None, '', None
+        return latest[1], latest[2], '', latest[0]
 
     def _log_db_paths(self) -> list[Path]:
         codex_home = self.sessions_dir.parent
@@ -344,6 +352,42 @@ class CodexQuotaReader:
                 break
 
         return False
+
+
+def _select_latest_quota_result(
+    *results: tuple[dict[str, Any] | None, Path | None, str, float | None],
+) -> tuple[dict[str, Any] | None, Path | None, str]:
+    candidates = [result for result in results if result[0] is not None]
+    if not candidates:
+        note = next((result[2] for result in results if result[2]), '')
+        return None, None, note
+
+    non_zero_candidates = [result for result in candidates if not _is_all_zero_quota_event(result[0] or {})]
+    selected_pool = non_zero_candidates or candidates
+    selected = max(selected_pool, key=lambda result: _quota_result_timestamp(result))
+    return selected[0], selected[1], selected[2]
+
+
+def _quota_result_timestamp(result: tuple[dict[str, Any] | None, Path | None, str, float | None]) -> float:
+    event, path, _note, event_ts = result
+    if event_ts is not None:
+        return event_ts
+    return _quota_event_timestamp(event, path)
+
+
+def _quota_event_timestamp(event: dict[str, Any] | None, path: Path | None) -> float:
+    if event is not None:
+        parsed = _parse_datetime(event.get('timestamp'))
+        if parsed is not None:
+            return parsed.timestamp()
+
+        payload = event.get('payload')
+        if isinstance(payload, dict):
+            parsed = _parse_datetime(payload.get('timestamp'))
+            if parsed is not None:
+                return parsed.timestamp()
+
+    return _path_mtime(path)
 
 
 def quota_is_exhausted(window: QuotaWindow, now: datetime) -> bool:
@@ -410,7 +454,19 @@ def _event_has_limit_signal(event: dict[str, Any]) -> bool:
         return True
 
     return bool(
-        re.search(r'\b(?:cool\s*down|quota|usage\s+limit|too\s+many\s+requests|429)\b', haystack, re.I)
+        re.search(
+            r'\b(?:'
+            r'cool\s*down|'
+            r'usage\s+limit|'
+            r'too\s+many\s+requests|'
+            r'429|'
+            r'limit\s+(?:reached|exceeded)|'
+            r'rate[-_\s]*limited|'
+            r'rate\s+limit(?:ed)?\s+(?:reached|exceeded)'
+            r')\b',
+            haystack,
+            re.I,
+        )
     )
 
 
@@ -622,7 +678,9 @@ def _file_is_older_than(path: Path | None, mtime: float | None) -> bool:
         return False
 
 
-def _path_mtime(path: Path) -> float:
+def _path_mtime(path: Path | None) -> float:
+    if path is None:
+        return 0.0
     try:
         return path.stat().st_mtime
     except OSError:

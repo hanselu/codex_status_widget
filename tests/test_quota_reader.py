@@ -31,12 +31,25 @@ def _write_logs_db(path: Path, bodies: list[str]) -> None:
         con.close()
 
 
+def _write_logs_db_with_ts(path: Path, rows: list[tuple[float, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(path)
+    try:
+        con.execute('create table logs (id integer primary key autoincrement, ts real, feedback_log_body text)')
+        for ts, body in rows:
+            con.execute('insert into logs (ts, feedback_log_body) values (?, ?)', (ts, body))
+        con.commit()
+    finally:
+        con.close()
+
+
 def _token_count(
     primary: float,
     secondary: float,
     resets_at: str | None = None,
     limit_name: str | None = None,
     limit_id: str | None = None,
+    timestamp: str | None = None,
 ) -> dict:
     rate_limits = {
         'primary': {
@@ -55,12 +68,15 @@ def _token_count(
     if limit_id is not None:
         rate_limits['limit_id'] = limit_id
 
-    return {
+    event = {
         'payload': {
             'type': 'token_count',
             'rate_limits': rate_limits,
         }
     }
+    if timestamp is not None:
+        event['timestamp'] = timestamp
+    return event
 
 
 def test_reads_latest_token_count(tmp_path: Path) -> None:
@@ -322,6 +338,46 @@ def test_skips_transient_all_zero_logged_rate_limits(tmp_path: Path) -> None:
     assert snap.quota_file == logs
 
 
+def test_prefers_newer_session_quota_over_stale_logged_rate_limits(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'a.jsonl'
+    logs = codex_home / 'logs_2.sqlite'
+    _write_jsonl(
+        session,
+        [
+            _token_count(76, 47, limit_id='codex', timestamp='2026-07-12T02:27:37Z'),
+        ],
+    )
+    _write_logs_db_with_ts(
+        logs,
+        [
+            (
+                datetime(2026, 7, 12, 1, 30, tzinfo=timezone.utc).timestamp(),
+                'Received message '
+                + json.dumps(
+                    {
+                        'type': 'codex.rate_limits',
+                        'rate_limits': {
+                            'allowed': True,
+                            'limit_reached': False,
+                            'limit_id': 'codex',
+                            'primary': {'used_percent': 73, 'reset_at': 1781813603, 'window_minutes': 300},
+                            'secondary': {'used_percent': 31, 'reset_at': 1782363500, 'window_minutes': 10080},
+                        },
+                    }
+                ),
+            )
+        ],
+    )
+
+    snap = CodexQuotaReader(sessions).read_quota()
+
+    assert snap.primary.used_percent == 76
+    assert snap.secondary.used_percent == 47
+    assert snap.quota_file == session
+
+
 def test_logged_limit_reached_sets_signal(tmp_path: Path) -> None:
     codex_home = tmp_path / '.codex'
     sessions = codex_home / 'sessions'
@@ -349,6 +405,30 @@ def test_logged_limit_reached_sets_signal(tmp_path: Path) -> None:
     snap = CodexQuotaReader(sessions).read_quota()
 
     assert snap.has_limit_signal is True
+
+
+def test_plain_quota_text_after_token_count_does_not_set_limit_signal(tmp_path: Path) -> None:
+    codex_home = tmp_path / '.codex'
+    sessions = codex_home / 'sessions'
+    session = sessions / 'a.jsonl'
+    _write_jsonl(
+        session,
+        [
+            _token_count(76, 47, limit_id='codex'),
+            {
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'debug output mentions quota_reader and quota fields',
+                },
+            },
+        ],
+    )
+
+    snap = CodexQuotaReader(sessions).read_quota()
+
+    assert snap.primary.used_percent == 76
+    assert snap.has_limit_signal is False
 
 
 def test_reuses_logged_rate_limits_after_same_account_auth_refresh(tmp_path: Path) -> None:
