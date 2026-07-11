@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QWidget
 
 from codex_widget import __version__
-from codex_widget.ui import _enable_inactive_tooltips, _format_display_note, _version_menu_text
+from codex_widget.ui import (
+    CodexWidget,
+    _enable_inactive_tooltips,
+    _format_display_note,
+    _quota_value_text,
+    _version_menu_text,
+)
 
 
 class _DummyWidget:
@@ -30,6 +37,32 @@ def test_format_display_note_keeps_active_summary() -> None:
 
 def test_format_display_note_translates_expired_event() -> None:
     assert _format_display_note('hook 工作中: UserPromptSubmitExpired') == '钩子：已自动恢复闲置'
+
+
+def test_quota_value_text_separates_caption_from_value() -> None:
+    assert _quota_value_text('5小时：71% 04:22', '5小时') == '71% 04:22'
+    assert _quota_value_text('周额度：46% 7-12 16:23', '周额度') == '46% 7-12 16:23'
+    assert _quota_value_text('未读取', '5小时') == '未读取'
+
+
+def test_quota_rows_align_captions_left_and_values_right() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+
+    CodexWidget._build_ui(widget)
+
+    assert widget.primary_caption_label.text() == '5小时'
+    assert widget.secondary_caption_label.text() == '周额度'
+    assert widget.primary_caption_label.alignment() & Qt.AlignmentFlag.AlignLeft
+    assert widget.secondary_caption_label.alignment() & Qt.AlignmentFlag.AlignLeft
+    assert widget.primary_value_label.alignment() & Qt.AlignmentFlag.AlignRight
+    assert widget.secondary_value_label.alignment() & Qt.AlignmentFlag.AlignRight
+    quota_layout = widget.card.layout().itemAt(1).layout()
+    assert quota_layout is not None
+    assert quota_layout.columnStretch(1) == 1
+
+    widget.close()
+    assert app is not None
 
 
 def test_enable_inactive_tooltips_sets_qt_attribute() -> None:

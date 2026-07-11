@@ -522,7 +522,7 @@ def test_codex_app_not_running_forces_red_status(tmp_path: Path) -> None:
     snapshot = CodexSnapshotReader(sessions, events, codex_app_running=lambda: False).read_snapshot()
 
     assert snapshot.status == 'offline'
-    assert snapshot.status_text == '无额度'
+    assert snapshot.status_text == '未运行'
     assert snapshot.codex_app_running is False
     assert 'ChatGPT App 未运行' in snapshot.note
 

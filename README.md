@@ -16,7 +16,8 @@ Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Co
 | 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有活跃 turn |
 | 蓝色 | 工作中 | 有活跃 turn，包括生成响应、工具执行或子任务运行 |
 | 橙色 | 待确认 | Hook 收到 `PermissionRequest`，或 transcript 中出现尚未完成的 `require_escalated` 工具调用 |
-| 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 ChatGPT App 进程未运行 |
+| 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来，或检测到明确 cooldown / quota / rate limit 错误 |
+| 红色 | 未运行 | ChatGPT App 进程未运行 |
 
 多对话同时运行时，主状态灯按优先级聚合：红色异常 > 待确认 > 工作中 > 闲置。小挂件正文只显示数量摘要，托盘和悬停提示显示具体对话明细。
 

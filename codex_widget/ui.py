@@ -5,6 +5,7 @@ from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -138,21 +139,40 @@ class CodexWidget(QWidget):
         top_row.addWidget(self.title_label, 1)
         layout.addLayout(top_row)
 
-        self.primary_label = QLabel('5小时：未读取', self.card)
-        self.secondary_label = QLabel('周额度：未读取', self.card)
+        quota_layout = QGridLayout()
+        quota_layout.setContentsMargins(0, 0, 0, 0)
+        quota_layout.setHorizontalSpacing(8)
+        quota_layout.setVerticalSpacing(layout.spacing())
+        quota_layout.setColumnStretch(1, 1)
+
+        self.primary_caption_label = QLabel('5小时', self.card)
+        self.primary_value_label = QLabel('未读取', self.card)
+        self.secondary_caption_label = QLabel('周额度', self.card)
+        self.secondary_value_label = QLabel('未读取', self.card)
+        self.primary_caption_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.primary_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.secondary_caption_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.secondary_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        quota_layout.addWidget(self.primary_caption_label, 0, 0)
+        quota_layout.addWidget(self.primary_value_label, 0, 1)
+        quota_layout.addWidget(self.secondary_caption_label, 1, 0)
+        quota_layout.addWidget(self.secondary_value_label, 1, 1)
+
         self.note_label = QLabel('', self.card)
         self.note_label.setObjectName('noteLabel')
         self.note_label.setWordWrap(False)
 
-        layout.addWidget(self.primary_label)
-        layout.addWidget(self.secondary_label)
+        layout.addLayout(quota_layout)
         layout.addWidget(self.note_label)
         _enable_inactive_tooltips(
             self.card,
             self.status_dot,
             self.title_label,
-            self.primary_label,
-            self.secondary_label,
+            self.primary_caption_label,
+            self.primary_value_label,
+            self.secondary_caption_label,
+            self.secondary_value_label,
             self.note_label,
         )
 
@@ -210,8 +230,12 @@ class CodexWidget(QWidget):
         color = STATUS_COLORS[snapshot.status]
         self.status_dot.setStyleSheet(f'background-color: {color}; border-radius: 6px;')
         self.title_label.setText(snapshot.status_text)
-        self.primary_label.setText(snapshot.primary_text)
-        self.secondary_label.setText(snapshot.secondary_text)
+        self.primary_value_label.setText(
+            _quota_value_text(snapshot.primary_text, self.primary_caption_label.text())
+        )
+        self.secondary_value_label.setText(
+            _quota_value_text(snapshot.secondary_text, self.secondary_caption_label.text())
+        )
         self._note_display_text = _format_display_note(snapshot.note)
         self.note_label.setText(self._note_display_text)
         tooltip_note = snapshot.detail or snapshot.note
@@ -221,8 +245,10 @@ class CodexWidget(QWidget):
             self.card,
             self.status_dot,
             self.title_label,
-            self.primary_label,
-            self.secondary_label,
+            self.primary_caption_label,
+            self.primary_value_label,
+            self.secondary_caption_label,
+            self.secondary_value_label,
             self.note_label,
         )
         self.note_label.setVisible(bool(snapshot.note))
@@ -247,8 +273,8 @@ class CodexWidget(QWidget):
             margins.top()
             + margins.bottom()
             + max(self.title_label.sizeHint().height(), self.status_dot.height())
-            + self.primary_label.sizeHint().height()
-            + self.secondary_label.sizeHint().height()
+            + max(self.primary_caption_label.sizeHint().height(), self.primary_value_label.sizeHint().height())
+            + max(self.secondary_caption_label.sizeHint().height(), self.secondary_value_label.sizeHint().height())
             + note_height
             + spacing * (line_count - 1)
             + 2
@@ -423,6 +449,11 @@ def _format_display_note(note: str) -> str:
     for event_name, label in sorted(HOOK_EVENT_LABELS.items(), key=lambda item: len(item[0]), reverse=True):
         text = text.replace(event_name, label)
     return text
+
+
+def _quota_value_text(text: str, caption: str) -> str:
+    prefix = f'{caption}：'
+    return text[len(prefix) :].strip() if text.startswith(prefix) else text.strip()
 
 
 def _elide_text(label: QLabel, text: str, width: int) -> str:

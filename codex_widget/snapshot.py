@@ -120,7 +120,7 @@ class CodexSnapshotReader:
             'working': '工作中',
             'waiting': '待确认',
             'cooldown': '无额度',
-            'offline': '无额度',
+            'offline': '未运行',
         }[status]
 
 
