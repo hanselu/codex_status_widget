@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from codex_widget import __version__
 from codex_widget.ui import (
+    MIN_WIDGET_HEIGHT,
     CodexWidget,
     _enable_inactive_tooltips,
     _format_display_note,
@@ -69,6 +70,49 @@ def test_quota_rows_place_percentage_in_far_right_column() -> None:
     assert quota_layout.getItemPosition(primary_percentage_index)[1] == 2
     assert quota_layout.getItemPosition(secondary_percentage_index)[1] == 2
 
+    widget.close()
+    assert app is not None
+
+
+def test_resize_counts_requested_note_visibility_before_first_show() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+    widget.setFixedSize(220, 132)
+    CodexWidget._build_ui(widget)
+    widget._note_display_text = '工作 × 1'
+    widget.note_label.setText(widget._note_display_text)
+    widget.note_label.setStyleSheet('font-size: 32px;')
+    widget.note_label.setVisible(True)
+    widget._max_available_height = lambda: 600
+    widget._keep_inside_screen = lambda: None
+
+    assert widget.note_label.isVisible() is False
+    assert widget.note_label.isHidden() is False
+    CodexWidget._resize_to_content(widget)
+    initial_height = widget.height()
+    assert initial_height > MIN_WIDGET_HEIGHT
+
+    widget.show()
+    app.processEvents()
+    CodexWidget._resize_to_content(widget)
+
+    assert widget.height() == initial_height
+    widget.close()
+
+
+def test_resize_excludes_explicitly_hidden_note_before_first_show() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+    widget.setFixedSize(220, 132)
+    CodexWidget._build_ui(widget)
+    widget._note_display_text = ''
+    widget.note_label.setVisible(False)
+    widget._max_available_height = lambda: 600
+    widget._keep_inside_screen = lambda: None
+
+    CodexWidget._resize_to_content(widget)
+
+    assert widget.height() == MIN_WIDGET_HEIGHT
     widget.close()
     assert app is not None
 

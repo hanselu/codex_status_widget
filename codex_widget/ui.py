@@ -277,7 +277,7 @@ class CodexWidget(QWidget):
         note_height = 0
         line_count = 3
 
-        if self.note_label.isVisible():
+        if not self.note_label.isHidden():
             self.note_label.setFixedWidth(body_width)
             self.note_label.setText(_elide_text(self.note_label, self._note_display_text, body_width))
             note_height = self.note_label.sizeHint().height()
