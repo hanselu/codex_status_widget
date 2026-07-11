@@ -1,6 +1,6 @@
 # Codex 状态与额度小挂件
 
-Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的多状态指示灯和订阅额度文本。
+Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Codex 的多状态指示灯和订阅额度文本。
 
 这一版把“状态”和“额度”彻底分开：
 
@@ -16,7 +16,7 @@ Windows 桌面小挂件，用 Python + PySide6 显示 Codex 桌面端的多状�
 | 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有活跃 turn |
 | 蓝色 | 工作中 | 有活跃 turn，包括生成响应、工具执行或子任务运行 |
 | 橙色 | 待确认 | Hook 收到 `PermissionRequest`，或 transcript 中出现尚未完成的 `require_escalated` 工具调用 |
-| 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 Codex App 进程未运行 |
+| 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来、检测到明确 cooldown / quota / rate limit 错误，或 ChatGPT App 进程未运行 |
 
 多对话同时运行时，主状态灯按优先级聚合：红色异常 > 待确认 > 工作中 > 闲置。小挂件正文只显示数量摘要，托盘和悬停提示显示具体对话明细。
 
@@ -47,7 +47,7 @@ uv run python main.py --install-hook
 2. 合并更新 `%USERPROFILE%\.codex\hooks.json`
 3. 自动备份原有 `hooks.json`
 
-安装后，需要在 Codex 里打开：
+安装后，需要在 ChatGPT App 的 Codex 中打开：
 
 ```text
 /hooks
@@ -107,9 +107,9 @@ uv run --with pyinstaller pyinstaller --noconfirm codex_status_widget.spec
 - 版本：当前版本号
 - 退出
 
-`标记为闲置` 用于 Codex 崩溃、Hook 没有收到 `Stop`、或者你手动想把黄灯重置为绿灯的情况。
+`标记为闲置` 用于 ChatGPT App 异常退出、Hook 没有收到 `Stop`、或者你手动想把黄灯重置为绿灯的情况。
 
-`添加钩子到 Codex` 会复制 hook writer 并合并更新 `%USERPROFILE%\.codex\hooks.json`。添加后仍需要在 Codex 里打开 `/hooks` 并 review / trust 新 hook。
+`添加钩子到 Codex` 会复制 hook writer 并合并更新 `%USERPROFILE%\.codex\hooks.json`。添加后仍需要在 ChatGPT App 的 Codex 中打开 `/hooks` 并 review / trust 新 hook。
 
 ## 卸载 Hook
 
@@ -162,7 +162,7 @@ refresh_interval_seconds = 5
 - 安装 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop` 和 `Stop`，用于区分工作、待确认和闲置。
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
 - `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
-- 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 Codex App 的孤儿事件长期保持状态灯活跃。
+- 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 ChatGPT App 中 Codex 的孤儿事件长期保持状态灯活跃。
 - `working_window_seconds` 只在 Hook 没安装或没被 trust 时作为回退判断使用。
 
 ## 文件说明
@@ -191,6 +191,7 @@ codex_status_widget/
 
 ## 设计取舍
 
+- 桌面应用检测精确识别 `ChatGPT.exe`，同时兼容旧版 `Codex.exe`；小写 `codex.exe` 是后台代理，不作为桌面应用。
 - Hook writer 不保存 prompt、tool input、tool output，只保存事件名、session id、turn id、cwd、model 等生命周期字段。
 - Hook writer 不输出 stdout，避免影响 Codex 上下文。
 - Hook writer 异常时返回 0，避免因为小挂件故障阻塞 Codex。

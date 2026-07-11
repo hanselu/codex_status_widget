@@ -524,7 +524,7 @@ def test_codex_app_not_running_forces_red_status(tmp_path: Path) -> None:
     assert snapshot.status == 'offline'
     assert snapshot.status_text == '无额度'
     assert snapshot.codex_app_running is False
-    assert 'Codex App 未运行' in snapshot.note
+    assert 'ChatGPT App 未运行' in snapshot.note
 
 
 def test_exhausted_quota_forces_red_status(tmp_path: Path) -> None:

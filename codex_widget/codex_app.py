@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-CODEX_APP_IMAGE_NAME = 'Codex.exe'
+DESKTOP_APP_IMAGE_NAMES = frozenset({'ChatGPT.exe', 'Codex.exe'})
 
 
 def codex_app_is_running(process_names: Iterable[str] | None = None) -> bool | None:
@@ -16,7 +16,9 @@ def codex_app_is_running(process_names: Iterable[str] | None = None) -> bool | N
         if process_names is None:
             return None
 
-    return any(name == CODEX_APP_IMAGE_NAME for name in process_names)
+    # Keep this comparison case-sensitive: `codex.exe` is the agent/CLI, not
+    # the desktop app. `Codex.exe` remains supported for users on older builds.
+    return any(name in DESKTOP_APP_IMAGE_NAMES for name in process_names)
 
 
 def _read_windows_process_names() -> list[str] | None:

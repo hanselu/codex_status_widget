@@ -278,7 +278,7 @@ class CodexWidget(QWidget):
         message = f'已安装 hook writer：{writer_path}\n已更新 Codex hooks：{hooks_path}'
         if backup_path:
             message += f'\n已备份原 hooks.json：{backup_path}'
-        message += '\n\n下一步：在 Codex 里打开 /hooks，review/trust 新 hook。'
+        message += '\n\n下一步：在 ChatGPT App 的 Codex 中打开 /hooks，review/trust 新 hook。'
 
         self.tray.showMessage(
             'Codex 状态',

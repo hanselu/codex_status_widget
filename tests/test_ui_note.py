@@ -19,9 +19,9 @@ def test_format_display_note_compacts_hook_status() -> None:
 
 
 def test_format_display_note_keeps_multiple_notes_on_one_line() -> None:
-    note = 'Codex App 未运行\nhook 闲置: Stop 00:12:47'
+    note = 'ChatGPT App 未运行\nhook 闲置: Stop 00:12:47'
 
-    assert _format_display_note(note) == 'Codex App 未运行 / 钩子：响应结束 00:12:47'
+    assert _format_display_note(note) == 'ChatGPT App 未运行 / 钩子：响应结束 00:12:47'
 
 
 def test_format_display_note_keeps_active_summary() -> None:

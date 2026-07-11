@@ -46,7 +46,7 @@ class CodexSnapshotReader:
         hook_setup_note = _visible_hook_setup_note(self._read_hook_setup_status())
 
         status = self._resolve_status(quota, hook_signal, now, codex_app_running)
-        app_note = 'Codex App 未运行' if codex_app_running is False else ''
+        app_note = 'ChatGPT App 未运行' if codex_app_running is False else ''
         hook_note = _visible_hook_note(hook_signal)
         hook_detail = _visible_hook_detail(hook_signal)
         notes = _split_notes([app_note, hook_setup_note, hook_note, quota.note])

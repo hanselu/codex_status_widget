@@ -44,7 +44,7 @@ def install_hook() -> int:
     print(f'已更新 Codex hooks：{hooks_path}')
     if backup_path:
         print(f'已备份原 hooks.json：{backup_path}')
-    print('下一步：在 Codex 里打开 /hooks，review/trust 新 hook。')
+    print('下一步：在 ChatGPT App 的 Codex 中打开 /hooks，review/trust 新 hook。')
     return 0
 
 
