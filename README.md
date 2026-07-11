@@ -91,8 +91,39 @@ uv run python main.py
 
 ## 打包 exe
 
+推荐使用项目根目录的一键打包脚本：
+
 ```powershell
-uv run --with pyinstaller pyinstaller --noconfirm codex_status_widget.spec
+.\package.ps1
+```
+
+脚本会依次执行：
+
+1. 检查 `uv`
+2. 运行 `uv run pytest`
+3. 停止正在运行的 `codex_status_widget.exe`
+4. 删除旧的 `build` / `dist`
+5. 使用 `codex_status_widget.spec` 强制重新打包
+6. 输出 exe 路径、大小、更新时间和 SHA256
+
+常用参数：
+
+```powershell
+.\package.ps1 -SkipTests
+.\package.ps1 -LaunchAfterBuild
+.\package.ps1 -SkipTests -LaunchAfterBuild
+```
+
+如果 PowerShell 执行策略拦截脚本，可以用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\package.ps1
+```
+
+也可以手动执行打包命令：
+
+```powershell
+uv run --with pyinstaller pyinstaller --noconfirm --clean codex_status_widget.spec
 ```
 
 必须使用项目根目录的 `codex_status_widget.spec` 打包；它会把 `codex_widget\hook_writer.py` 一起打进 exe。否则打包版右键“添加钩子到 Codex”时无法复制 hook writer。
@@ -163,7 +194,7 @@ refresh_interval_seconds = 5
 - 安装 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop` 和 `Stop`，用于区分工作、待确认和闲置。
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
 - `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
-- 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 10 分钟后视为闲置，避免新版 ChatGPT App 中 Codex 的孤儿事件长期保持状态灯活跃。
+- 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 30 秒后视为闲置，避免新版 ChatGPT App 中 Codex 的孤儿事件长期保持状态灯活跃。
 - `working_window_seconds` 只在 Hook 没安装或没被 trust 时作为回退判断使用。
 
 ## 文件说明
@@ -173,6 +204,7 @@ codex_status_widget/
 ├─ main.py
 ├─ pyproject.toml
 ├─ README.md
+├─ package.ps1
 ├─ run_widget.ps1
 ├─ check_once.ps1
 ├─ install_hook.ps1
