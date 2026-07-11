@@ -146,18 +146,24 @@ class CodexWidget(QWidget):
         quota_layout.setColumnStretch(1, 1)
 
         self.primary_caption_label = QLabel('5小时', self.card)
-        self.primary_value_label = QLabel('未读取', self.card)
+        self.primary_reset_label = QLabel('', self.card)
+        self.primary_percentage_label = QLabel('未读取', self.card)
         self.secondary_caption_label = QLabel('周额度', self.card)
-        self.secondary_value_label = QLabel('未读取', self.card)
+        self.secondary_reset_label = QLabel('', self.card)
+        self.secondary_percentage_label = QLabel('未读取', self.card)
         self.primary_caption_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.primary_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.primary_reset_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.primary_percentage_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.secondary_caption_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.secondary_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.secondary_reset_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.secondary_percentage_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         quota_layout.addWidget(self.primary_caption_label, 0, 0)
-        quota_layout.addWidget(self.primary_value_label, 0, 1)
+        quota_layout.addWidget(self.primary_reset_label, 0, 1)
+        quota_layout.addWidget(self.primary_percentage_label, 0, 2)
         quota_layout.addWidget(self.secondary_caption_label, 1, 0)
-        quota_layout.addWidget(self.secondary_value_label, 1, 1)
+        quota_layout.addWidget(self.secondary_reset_label, 1, 1)
+        quota_layout.addWidget(self.secondary_percentage_label, 1, 2)
 
         self.note_label = QLabel('', self.card)
         self.note_label.setObjectName('noteLabel')
@@ -170,9 +176,11 @@ class CodexWidget(QWidget):
             self.status_dot,
             self.title_label,
             self.primary_caption_label,
-            self.primary_value_label,
+            self.primary_reset_label,
+            self.primary_percentage_label,
             self.secondary_caption_label,
-            self.secondary_value_label,
+            self.secondary_reset_label,
+            self.secondary_percentage_label,
             self.note_label,
         )
 
@@ -230,12 +238,16 @@ class CodexWidget(QWidget):
         color = STATUS_COLORS[snapshot.status]
         self.status_dot.setStyleSheet(f'background-color: {color}; border-radius: 6px;')
         self.title_label.setText(snapshot.status_text)
-        self.primary_value_label.setText(
-            _quota_value_text(snapshot.primary_text, self.primary_caption_label.text())
+        primary_percentage, primary_reset = _quota_display_parts(
+            snapshot.primary_text, self.primary_caption_label.text()
         )
-        self.secondary_value_label.setText(
-            _quota_value_text(snapshot.secondary_text, self.secondary_caption_label.text())
+        secondary_percentage, secondary_reset = _quota_display_parts(
+            snapshot.secondary_text, self.secondary_caption_label.text()
         )
+        self.primary_reset_label.setText(primary_reset)
+        self.primary_percentage_label.setText(primary_percentage)
+        self.secondary_reset_label.setText(secondary_reset)
+        self.secondary_percentage_label.setText(secondary_percentage)
         self._note_display_text = _format_display_note(snapshot.note)
         self.note_label.setText(self._note_display_text)
         tooltip_note = snapshot.detail or snapshot.note
@@ -246,9 +258,11 @@ class CodexWidget(QWidget):
             self.status_dot,
             self.title_label,
             self.primary_caption_label,
-            self.primary_value_label,
+            self.primary_reset_label,
+            self.primary_percentage_label,
             self.secondary_caption_label,
-            self.secondary_value_label,
+            self.secondary_reset_label,
+            self.secondary_percentage_label,
             self.note_label,
         )
         self.note_label.setVisible(bool(snapshot.note))
@@ -273,8 +287,16 @@ class CodexWidget(QWidget):
             margins.top()
             + margins.bottom()
             + max(self.title_label.sizeHint().height(), self.status_dot.height())
-            + max(self.primary_caption_label.sizeHint().height(), self.primary_value_label.sizeHint().height())
-            + max(self.secondary_caption_label.sizeHint().height(), self.secondary_value_label.sizeHint().height())
+            + max(
+                self.primary_caption_label.sizeHint().height(),
+                self.primary_reset_label.sizeHint().height(),
+                self.primary_percentage_label.sizeHint().height(),
+            )
+            + max(
+                self.secondary_caption_label.sizeHint().height(),
+                self.secondary_reset_label.sizeHint().height(),
+                self.secondary_percentage_label.sizeHint().height(),
+            )
             + note_height
             + spacing * (line_count - 1)
             + 2
@@ -451,9 +473,11 @@ def _format_display_note(note: str) -> str:
     return text
 
 
-def _quota_value_text(text: str, caption: str) -> str:
+def _quota_display_parts(text: str, caption: str) -> tuple[str, str]:
     prefix = f'{caption}：'
-    return text[len(prefix) :].strip() if text.startswith(prefix) else text.strip()
+    value = text[len(prefix) :].strip() if text.startswith(prefix) else text.strip()
+    percentage, separator, reset_time = value.partition(' ')
+    return percentage, reset_time.strip() if separator else ''
 
 
 def _elide_text(label: QLabel, text: str, width: int) -> str:

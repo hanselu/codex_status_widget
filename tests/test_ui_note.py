@@ -8,7 +8,7 @@ from codex_widget.ui import (
     CodexWidget,
     _enable_inactive_tooltips,
     _format_display_note,
-    _quota_value_text,
+    _quota_display_parts,
     _version_menu_text,
 )
 
@@ -39,13 +39,14 @@ def test_format_display_note_translates_expired_event() -> None:
     assert _format_display_note('hook 工作中: UserPromptSubmitExpired') == '钩子：已自动恢复闲置'
 
 
-def test_quota_value_text_separates_caption_from_value() -> None:
-    assert _quota_value_text('5小时：71% 04:22', '5小时') == '71% 04:22'
-    assert _quota_value_text('周额度：46% 7-12 16:23', '周额度') == '46% 7-12 16:23'
-    assert _quota_value_text('未读取', '5小时') == '未读取'
+def test_quota_display_parts_separate_percentage_and_reset_time() -> None:
+    assert _quota_display_parts('5小时：71% 04:22', '5小时') == ('71%', '04:22')
+    assert _quota_display_parts('周额度：46% 7-12 16:23', '周额度') == ('46%', '7-12 16:23')
+    assert _quota_display_parts('5小时：未读取 未知', '5小时') == ('未读取', '未知')
+    assert _quota_display_parts('未读取', '5小时') == ('未读取', '')
 
 
-def test_quota_rows_align_captions_left_and_values_right() -> None:
+def test_quota_rows_place_percentage_in_far_right_column() -> None:
     app = QApplication.instance() or QApplication([])
     widget = QWidget()
 
@@ -55,11 +56,18 @@ def test_quota_rows_align_captions_left_and_values_right() -> None:
     assert widget.secondary_caption_label.text() == '周额度'
     assert widget.primary_caption_label.alignment() & Qt.AlignmentFlag.AlignLeft
     assert widget.secondary_caption_label.alignment() & Qt.AlignmentFlag.AlignLeft
-    assert widget.primary_value_label.alignment() & Qt.AlignmentFlag.AlignRight
-    assert widget.secondary_value_label.alignment() & Qt.AlignmentFlag.AlignRight
+    assert widget.primary_reset_label.alignment() & Qt.AlignmentFlag.AlignRight
+    assert widget.secondary_reset_label.alignment() & Qt.AlignmentFlag.AlignRight
+    assert widget.primary_percentage_label.alignment() & Qt.AlignmentFlag.AlignRight
+    assert widget.secondary_percentage_label.alignment() & Qt.AlignmentFlag.AlignRight
     quota_layout = widget.card.layout().itemAt(1).layout()
     assert quota_layout is not None
     assert quota_layout.columnStretch(1) == 1
+    assert quota_layout.columnStretch(2) == 0
+    primary_percentage_index = quota_layout.indexOf(widget.primary_percentage_label)
+    secondary_percentage_index = quota_layout.indexOf(widget.secondary_percentage_label)
+    assert quota_layout.getItemPosition(primary_percentage_index)[1] == 2
+    assert quota_layout.getItemPosition(secondary_percentage_index)[1] == 2
 
     widget.close()
     assert app is not None
