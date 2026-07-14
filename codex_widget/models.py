@@ -54,10 +54,14 @@ class HookSignal:
 class CodexSnapshot:
     status: StatusName
     status_text: str
+    primary_title: str
     primary: QuotaWindow
-    secondary: QuotaWindow
     primary_text: str
+    primary_visible: bool
+    secondary_title: str
+    secondary: QuotaWindow
     secondary_text: str
+    secondary_visible: bool
     reset_text: str
     updated_text: str
     note: str = ''

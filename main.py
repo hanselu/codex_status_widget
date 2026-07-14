@@ -23,8 +23,10 @@ def print_once() -> int:
     snapshot = reader.read_snapshot()
 
     print(f'状态：{snapshot.status_text}')
-    print(snapshot.primary_text)
-    print(snapshot.secondary_text)
+    if snapshot.primary_visible:
+        print(snapshot.primary_text)
+    if snapshot.secondary_visible:
+        print(snapshot.secondary_text)
     if snapshot.reset_text:
         print(snapshot.reset_text)
     if snapshot.note:

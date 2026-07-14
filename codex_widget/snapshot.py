@@ -8,7 +8,7 @@ import time
 from .approval_state import PendingApproval, read_pending_approvals
 from .hook_installer import HookSetupStatus
 from .hook_state import HookStateReader
-from .models import CodexSnapshot, HookSignal, StatusName
+from .models import CodexSnapshot, HookSignal, QuotaWindow, StatusName
 from .quota_reader import CodexQuotaReader, format_reset_time, quota_is_exhausted, quota_text
 
 
@@ -53,14 +53,26 @@ class CodexSnapshotReader:
         note = '\n'.join(_dedupe_preserve_order(notes))
         detail_notes = _split_notes([app_note, hook_setup_note, hook_detail, quota.note])
         detail = '\n'.join(_dedupe_preserve_order(detail_notes))
+        display_slots = _normalize_quota_windows(quota.primary, quota.secondary)
+        primary_title, primary, primary_text = display_slots[0]
+        if len(display_slots) > 1:
+            secondary_title, secondary, secondary_text = display_slots[1]
+            secondary_visible = True
+        else:
+            secondary_title, secondary, secondary_text = '', QuotaWindow(), ''
+            secondary_visible = False
 
         return CodexSnapshot(
             status=status,
             status_text=self._status_text(status),
-            primary=quota.primary,
-            secondary=quota.secondary,
-            primary_text=f'5小时：{quota_text(quota.primary)} {format_reset_time(quota.primary.resets_at)}',
-            secondary_text=f'周额度：{quota_text(quota.secondary)} {format_reset_time(quota.secondary.resets_at, with_date=True)}',
+            primary_title=primary_title,
+            primary=primary,
+            primary_text=primary_text,
+            primary_visible=True,
+            secondary_title=secondary_title,
+            secondary=secondary,
+            secondary_text=secondary_text,
+            secondary_visible=secondary_visible,
             reset_text='',
             updated_text=f'{now:%H:%M:%S}',
             note=note,
@@ -122,6 +134,55 @@ class CodexSnapshotReader:
             'cooldown': '无额度',
             'offline': '未运行',
         }[status]
+
+
+def _normalize_quota_windows(
+    primary: QuotaWindow,
+    secondary: QuotaWindow,
+) -> list[tuple[str, QuotaWindow, str]]:
+    windows = [
+        (index, window)
+        for index, window in enumerate((primary, secondary))
+        if _quota_window_has_data(window)
+    ]
+    windows.sort(key=lambda item: (_quota_window_order(item[1]), item[0]))
+
+    if not windows:
+        window = QuotaWindow()
+        return [('额度', window, _quota_window_text('额度', window))]
+
+    result: list[tuple[str, QuotaWindow, str]] = []
+    unknown_count = 0
+    for _, window in windows:
+        if window.window_minutes == 300:
+            title = '5小时'
+        elif window.window_minutes == 10080:
+            title = '周额度'
+        else:
+            title = '额度' if unknown_count == 0 else '额外额度'
+            unknown_count += 1
+        result.append((title, window, _quota_window_text(title, window)))
+    return result
+
+
+def _quota_window_has_data(window: QuotaWindow) -> bool:
+    return any(
+        value is not None
+        for value in (window.window_minutes, window.used_percent, window.resets_at)
+    )
+
+
+def _quota_window_order(window: QuotaWindow) -> int:
+    if window.window_minutes == 300:
+        return 0
+    if window.window_minutes == 10080:
+        return 1
+    return 2
+
+
+def _quota_window_text(title: str, window: QuotaWindow) -> str:
+    reset = format_reset_time(window.resets_at, with_date=window.window_minutes != 300)
+    return f'{title}：{quota_text(window)} {reset}'
 
 
 def _dedupe_preserve_order(items: list[str]) -> list[str]:

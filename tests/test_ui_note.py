@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
 from codex_widget import __version__
+from codex_widget.models import CodexSnapshot, HookSignal, QuotaWindow
 from codex_widget.ui import (
     MIN_WIDGET_HEIGHT,
     CodexWidget,
@@ -20,6 +21,42 @@ class _DummyWidget:
 
     def setAttribute(self, attribute, enabled=True) -> None:  # noqa: ANN001
         self.attributes.append((attribute, enabled))
+
+
+class _TrayStub:
+    def __init__(self) -> None:
+        self.tooltip = ''
+
+    def setToolTip(self, text: str) -> None:
+        self.tooltip = text
+
+
+def _snapshot(
+    *,
+    primary_title: str,
+    primary: QuotaWindow,
+    primary_text: str,
+    primary_visible: bool,
+    secondary_title: str = '',
+    secondary: QuotaWindow | None = None,
+    secondary_text: str = '',
+    secondary_visible: bool = False,
+) -> CodexSnapshot:
+    return CodexSnapshot(
+        status='idle',
+        status_text='闲置中',
+        primary_title=primary_title,
+        primary=primary,
+        primary_text=primary_text,
+        primary_visible=primary_visible,
+        secondary_title=secondary_title,
+        secondary=secondary or QuotaWindow(),
+        secondary_text=secondary_text,
+        secondary_visible=secondary_visible,
+        reset_text='',
+        updated_text='12:00:00',
+        hook_signal=HookSignal(status='idle'),
+    )
 
 
 def test_format_display_note_compacts_hook_status() -> None:
@@ -53,8 +90,8 @@ def test_quota_rows_place_percentage_in_far_right_column() -> None:
 
     CodexWidget._build_ui(widget)
 
-    assert widget.primary_caption_label.text() == '5小时'
-    assert widget.secondary_caption_label.text() == '周额度'
+    assert widget.primary_caption_label.text() == '额度'
+    assert widget.secondary_caption_label.text() == '额外额度'
     assert widget.primary_caption_label.alignment() & Qt.AlignmentFlag.AlignLeft
     assert widget.secondary_caption_label.alignment() & Qt.AlignmentFlag.AlignLeft
     assert widget.primary_reset_label.alignment() & Qt.AlignmentFlag.AlignRight
@@ -107,12 +144,76 @@ def test_resize_excludes_explicitly_hidden_note_before_first_show() -> None:
     CodexWidget._build_ui(widget)
     widget._note_display_text = ''
     widget.note_label.setVisible(False)
+    widget.secondary_caption_label.setVisible(False)
+    widget.secondary_reset_label.setVisible(False)
+    widget.secondary_percentage_label.setVisible(False)
     widget._max_available_height = lambda: 600
     widget._keep_inside_screen = lambda: None
 
     CodexWidget._resize_to_content(widget)
 
     assert widget.height() == MIN_WIDGET_HEIGHT
+    widget.close()
+    assert app is not None
+
+
+def test_apply_snapshot_switches_quota_rows_between_single_and_double() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+    widget.setFixedSize(220, 132)
+    CodexWidget._build_ui(widget)
+    widget._note_display_text = ''
+    widget._max_available_height = lambda: 600
+    widget._keep_inside_screen = lambda: None
+    widget._resize_to_content = lambda: CodexWidget._resize_to_content(widget)
+    widget._set_tray_icon = lambda status: None
+    widget.tray = _TrayStub()
+
+    weekly_only = _snapshot(
+        primary_title='周额度',
+        primary=QuotaWindow(used_percent=3, window_minutes=10080),
+        primary_text='周额度：97% 7-21 20:22',
+        primary_visible=True,
+        secondary_title='额外额度',
+        secondary_text='额外额度：50% 7-22 12:00',
+    )
+    CodexWidget._apply_snapshot(widget, weekly_only)
+    single_row_height = widget.height()
+
+    assert widget.primary_caption_label.text() == '周额度'
+    assert widget.primary_percentage_label.text() == '97%'
+    assert widget.primary_reset_label.text() == '7-21 20:22'
+    assert widget.primary_caption_label.isHidden() is False
+    assert widget.secondary_caption_label.isHidden() is True
+    assert widget.secondary_reset_label.isHidden() is True
+    assert widget.secondary_percentage_label.isHidden() is True
+    assert '周额度：97% 7-21 20:22' in widget.tray.tooltip
+    assert '额外额度' not in widget.tray.tooltip
+
+    legacy = _snapshot(
+        primary_title='5小时',
+        primary=QuotaWindow(used_percent=25, window_minutes=300),
+        primary_text='5小时：75% 04:22',
+        primary_visible=True,
+        secondary_title='周额度',
+        secondary=QuotaWindow(used_percent=40, window_minutes=10080),
+        secondary_text='周额度：60% 7-21 20:22',
+        secondary_visible=True,
+    )
+    CodexWidget._apply_snapshot(widget, legacy)
+    double_row_height = widget.height()
+
+    assert widget.primary_caption_label.text() == '5小时'
+    assert widget.secondary_caption_label.text() == '周额度'
+    assert widget.secondary_caption_label.isHidden() is False
+    assert widget.secondary_reset_label.isHidden() is False
+    assert widget.secondary_percentage_label.isHidden() is False
+    assert double_row_height > single_row_height
+
+    CodexWidget._apply_snapshot(widget, weekly_only)
+
+    assert widget.secondary_caption_label.isHidden() is True
+    assert widget.height() == single_row_height
     widget.close()
     assert app is not None
 

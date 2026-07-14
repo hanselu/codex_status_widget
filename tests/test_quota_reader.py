@@ -86,7 +86,9 @@ def test_reads_latest_token_count(tmp_path: Path) -> None:
     snap = CodexQuotaReader(tmp_path / 'sessions').read_quota()
 
     assert snap.primary.used_percent == 29
+    assert snap.primary.window_minutes == 300
     assert snap.secondary.used_percent == 54
+    assert snap.secondary.window_minutes == 10080
     assert snap.quota_source == 'Codex-Pro'
     assert snap.note == ''
 

@@ -31,7 +31,7 @@ STATUS_COLORS: dict[StatusName, str] = {
     'offline': '#ff5a5f',
 }
 
-MIN_WIDGET_HEIGHT = 86
+MIN_WIDGET_HEIGHT = 64
 HOOK_EVENT_LABELS = {
     'UserPromptSubmit': '提交提示词',
     'PreToolUse': '工具调用前',
@@ -145,10 +145,10 @@ class CodexWidget(QWidget):
         quota_layout.setVerticalSpacing(layout.spacing())
         quota_layout.setColumnStretch(1, 1)
 
-        self.primary_caption_label = QLabel('5小时', self.card)
+        self.primary_caption_label = QLabel('额度', self.card)
         self.primary_reset_label = QLabel('', self.card)
         self.primary_percentage_label = QLabel('未读取', self.card)
-        self.secondary_caption_label = QLabel('周额度', self.card)
+        self.secondary_caption_label = QLabel('额外额度', self.card)
         self.secondary_reset_label = QLabel('', self.card)
         self.secondary_percentage_label = QLabel('未读取', self.card)
         self.primary_caption_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -238,11 +238,25 @@ class CodexWidget(QWidget):
         color = STATUS_COLORS[snapshot.status]
         self.status_dot.setStyleSheet(f'background-color: {color}; border-radius: 6px;')
         self.title_label.setText(snapshot.status_text)
+        self.primary_caption_label.setText(snapshot.primary_title)
+        self.secondary_caption_label.setText(snapshot.secondary_title)
+        for label in (
+            self.primary_caption_label,
+            self.primary_reset_label,
+            self.primary_percentage_label,
+        ):
+            label.setVisible(snapshot.primary_visible)
+        for label in (
+            self.secondary_caption_label,
+            self.secondary_reset_label,
+            self.secondary_percentage_label,
+        ):
+            label.setVisible(snapshot.secondary_visible)
         primary_percentage, primary_reset = _quota_display_parts(
-            snapshot.primary_text, self.primary_caption_label.text()
+            snapshot.primary_text, snapshot.primary_title
         )
         secondary_percentage, secondary_reset = _quota_display_parts(
-            snapshot.secondary_text, self.secondary_caption_label.text()
+            snapshot.secondary_text, snapshot.secondary_title
         )
         self.primary_reset_label.setText(primary_reset)
         self.primary_percentage_label.setText(primary_percentage)
@@ -274,31 +288,35 @@ class CodexWidget(QWidget):
         margins = self.card.layout().contentsMargins()
         spacing = self.card.layout().spacing()
         body_width = max(1, self.width() - margins.left() - margins.right())
-        note_height = 0
-        line_count = 3
+        line_heights = [max(self.title_label.sizeHint().height(), self.status_dot.height())]
+
+        if not self.primary_caption_label.isHidden():
+            line_heights.append(
+                max(
+                    self.primary_caption_label.sizeHint().height(),
+                    self.primary_reset_label.sizeHint().height(),
+                    self.primary_percentage_label.sizeHint().height(),
+                )
+            )
+        if not self.secondary_caption_label.isHidden():
+            line_heights.append(
+                max(
+                    self.secondary_caption_label.sizeHint().height(),
+                    self.secondary_reset_label.sizeHint().height(),
+                    self.secondary_percentage_label.sizeHint().height(),
+                )
+            )
 
         if not self.note_label.isHidden():
             self.note_label.setFixedWidth(body_width)
             self.note_label.setText(_elide_text(self.note_label, self._note_display_text, body_width))
-            note_height = self.note_label.sizeHint().height()
-            line_count += 1
+            line_heights.append(self.note_label.sizeHint().height())
 
         content_height = (
             margins.top()
             + margins.bottom()
-            + max(self.title_label.sizeHint().height(), self.status_dot.height())
-            + max(
-                self.primary_caption_label.sizeHint().height(),
-                self.primary_reset_label.sizeHint().height(),
-                self.primary_percentage_label.sizeHint().height(),
-            )
-            + max(
-                self.secondary_caption_label.sizeHint().height(),
-                self.secondary_reset_label.sizeHint().height(),
-                self.secondary_percentage_label.sizeHint().height(),
-            )
-            + note_height
-            + spacing * (line_count - 1)
+            + sum(line_heights)
+            + spacing * (len(line_heights) - 1)
             + 2
         )
         max_height = self._max_available_height()
@@ -452,8 +470,8 @@ def _format_panel_tooltip(snapshot: CodexSnapshot, note: str) -> str:
         part
         for part in [
             snapshot.status_text,
-            snapshot.primary_text,
-            snapshot.secondary_text,
+            snapshot.primary_text if snapshot.primary_visible else '',
+            snapshot.secondary_text if snapshot.secondary_visible else '',
             note,
         ]
         if part
