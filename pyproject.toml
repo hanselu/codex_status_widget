@@ -9,7 +9,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "nuitka>=4.1.3",
   "pytest>=8.0",
+  "zstandard>=0.25.0",
 ]
 
 [tool.pytest.ini_options]

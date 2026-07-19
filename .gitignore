@@ -17,6 +17,8 @@ htmlcov/
 # Build artifacts
 build/
 dist/
+dist_nuitka*/
+nuitka-crash-report.xml
 *.egg-info/
 
 # Tool caches
