@@ -132,6 +132,7 @@ uv run --with pyinstaller pyinstaller --noconfirm --clean codex_status_widget.sp
 ## 右键菜单
 
 - 刷新
+- 查询重置额度
 - 标记为闲置
 - 锁定位置 / 解锁位置
 - 添加钩子到 Codex
@@ -141,6 +142,8 @@ uv run --with pyinstaller pyinstaller --noconfirm --clean codex_status_widget.sp
 - 退出
 
 `标记为闲置` 用于 ChatGPT App 异常退出、Hook 没有收到 `Stop`、或者你手动想把黄灯重置为绿灯的情况。
+
+`查询重置额度` 只在点击时读取 Codex sessions 配置目录同级的 `auth.json`（默认为 `%USERPROFILE%\.codex\auth.json`）中的 `access_token`，向 ChatGPT 查询可用重置额度，并用消息框显示状态、标题以及换算为本地时间的发放/过期时间。查询结果不会显示在挂件面板中。
 
 `添加钩子到 Codex` 会复制 hook writer 并合并更新 `%USERPROFILE%\.codex\hooks.json`。添加后仍需要在 ChatGPT App 的 Codex 中打开 `/hooks` 并 review / trust 新 hook。
 
@@ -229,4 +232,4 @@ codex_status_widget/
 - Hook writer 不保存 prompt、tool input、tool output，只保存事件名、session id、turn id、cwd、model 等生命周期字段。
 - Hook writer 不输出 stdout，避免影响 Codex 上下文。
 - Hook writer 异常时返回 0，避免因为小挂件故障阻塞 Codex。
-- 额度读取只使用本地 Codex 日志和 `token_count`，不使用 API Key、不读取 ChatGPT Cookie。
+- 挂件面板的常规额度读取只使用本地 Codex 日志和 `token_count`；只有用户主动点击“查询重置额度”时才读取本机 `access_token` 并请求 ChatGPT。程序不读取 Cookie、不会显示或持久化 token。

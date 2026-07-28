@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QFontMetrics, QMouseEvent, QPainter, QPixmap
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -20,6 +21,14 @@ from .config import CONFIG_DIR, AppConfig
 from .codex_app import codex_app_is_running
 from .hook_installer import install_hooks, read_hook_setup_status
 from .models import CodexSnapshot, StatusName
+from .reset_credits import (
+    RESET_CREDITS_TIMEOUT_MS,
+    RESET_CREDITS_URL,
+    ResetCreditsError,
+    format_reset_credits,
+    parse_reset_credits_response,
+    read_access_token,
+)
 from .snapshot import CodexSnapshotReader
 
 
@@ -69,6 +78,8 @@ class CodexWidget(QWidget):
         self._drag_offset: QPoint | None = None
         self._last_snapshot: CodexSnapshot | None = None
         self._note_display_text = ''
+        self._network_manager = QNetworkAccessManager(self)
+        self._reset_credits_reply: QNetworkReply | None = None
 
         self._build_window()
         self._build_ui()
@@ -190,6 +201,10 @@ class CodexWidget(QWidget):
         self.refresh_action = QAction('刷新', self)
         self.refresh_action.triggered.connect(self.refresh)
         self.menu.addAction(self.refresh_action)
+
+        self.reset_credits_action = QAction('查询重置额度', self)
+        self.reset_credits_action.triggered.connect(self.query_reset_credits)
+        self.menu.addAction(self.reset_credits_action)
 
         self.mark_idle_action = QAction('标记为闲置', self)
         self.mark_idle_action.triggered.connect(self.mark_idle)
@@ -354,6 +369,54 @@ class CodexWidget(QWidget):
         )
         QMessageBox.information(self, '已添加钩子到 Codex', message)
         self.refresh()
+
+    def query_reset_credits(self) -> None:
+        if self._reset_credits_reply is not None:
+            return
+
+        auth_path = self.config.codex.sessions_dir.parent / 'auth.json'
+        try:
+            access_token = read_access_token(auth_path)
+        except ResetCreditsError as exc:
+            QMessageBox.critical(self, '查询重置额度失败', str(exc))
+            return
+
+        request = QNetworkRequest(QUrl(RESET_CREDITS_URL))
+        request.setRawHeader(b'Accept', b'application/json')
+        request.setRawHeader(b'Authorization', f'Bearer {access_token}'.encode('utf-8'))
+        request.setTransferTimeout(RESET_CREDITS_TIMEOUT_MS)
+
+        self.reset_credits_action.setEnabled(False)
+        reply = self._network_manager.get(request)
+        self._reset_credits_reply = reply
+        reply.finished.connect(lambda: self._finish_reset_credits_query(reply))
+
+    def _finish_reset_credits_query(self, reply: QNetworkReply) -> None:
+        if self._reset_credits_reply is reply:
+            self._reset_credits_reply = None
+        self.reset_credits_action.setEnabled(True)
+
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        status_code = int(status) if status is not None else None
+        try:
+            if status_code == 401:
+                raise ResetCreditsError(
+                    'Codex 凭证已失效，或请求未被服务器识别为携带 Authorization。'
+                    '请在 ChatGPT App 中重新登录后再试。'
+                )
+            if status_code is not None and status_code >= 400:
+                raise ResetCreditsError(f'查询失败：服务器返回 HTTP {status_code}。')
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                raise ResetCreditsError('查询失败：无法连接 ChatGPT，请检查网络后重试。')
+
+            summary = parse_reset_credits_response(bytes(reply.readAll()))
+            message = format_reset_credits(summary)
+        except ResetCreditsError as exc:
+            QMessageBox.critical(self, '查询重置额度失败', str(exc))
+        else:
+            QMessageBox.information(self, '重置额度', message)
+        finally:
+            reply.deleteLater()
 
     def open_sessions_dir(self) -> None:
         path = self.config.codex.sessions_dir
