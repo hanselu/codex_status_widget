@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import sqlite3
 
+from codex_widget.app_server_quota_reader import AppServerQuotaError
+from codex_widget.models import QuotaSnapshot, QuotaWindow
 from codex_widget.quota_reader import CodexQuotaReader, quota_is_exhausted
 
 
@@ -43,6 +45,20 @@ def _write_logs_db_with_ts(path: Path, rows: list[tuple[float, str]]) -> None:
         con.close()
 
 
+class _RealtimeQuota:
+    def __init__(self, snapshot: QuotaSnapshot | None = None, error: str = '') -> None:
+        self.snapshot = snapshot
+        self.error = error
+        self.calls = 0
+
+    def read_quota(self) -> QuotaSnapshot:
+        self.calls += 1
+        if self.error:
+            raise AppServerQuotaError(self.error)
+        assert self.snapshot is not None
+        return self.snapshot
+
+
 def _token_count(
     primary: float,
     secondary: float,
@@ -77,6 +93,75 @@ def _token_count(
     if timestamp is not None:
         event['timestamp'] = timestamp
     return event
+
+
+def test_realtime_quota_is_used_before_local_sessions(tmp_path: Path) -> None:
+    path = tmp_path / 'sessions' / 'a.jsonl'
+    _write_jsonl(path, [_token_count(12, 34, limit_id='codex')])
+    realtime = _RealtimeQuota(
+        QuotaSnapshot(
+            primary=QuotaWindow(used_percent=88, window_minutes=10080),
+            secondary=QuotaWindow(),
+            quota_source='app-server',
+        )
+    )
+
+    snap = CodexQuotaReader(tmp_path / 'sessions', app_server_reader=realtime).read_quota()
+
+    assert realtime.calls == 1
+    assert snap.primary.used_percent == 88
+    assert snap.primary.window_minutes == 10080
+    assert snap.secondary.used_percent is None
+    assert snap.quota_source == 'app-server'
+    assert snap.note == ''
+
+
+def test_realtime_success_does_not_require_session_file(tmp_path: Path) -> None:
+    realtime = _RealtimeQuota(
+        QuotaSnapshot(
+            primary=QuotaWindow(used_percent=3, window_minutes=10080),
+            quota_source='app-server',
+        )
+    )
+
+    snap = CodexQuotaReader(tmp_path / 'sessions', app_server_reader=realtime).read_quota()
+
+    assert snap.primary.used_percent == 3
+    assert snap.note == ''
+
+
+def test_realtime_failure_falls_back_to_local_sessions(tmp_path: Path) -> None:
+    path = tmp_path / 'sessions' / 'a.jsonl'
+    _write_jsonl(path, [_token_count(12, 34, limit_id='codex')])
+    realtime = _RealtimeQuota(error='protocol error from codex_bengalfox debug source')
+
+    snap = CodexQuotaReader(tmp_path / 'sessions', app_server_reader=realtime).read_quota()
+
+    assert realtime.calls == 1
+    assert snap.primary.used_percent == 12
+    assert snap.secondary.used_percent == 34
+    assert snap.note == ''
+    assert 'codex_bengalfox' not in snap.note
+
+
+def test_realtime_failure_without_local_quota_does_not_create_limit_signal(tmp_path: Path) -> None:
+    realtime = _RealtimeQuota(error='app-server 响应超时')
+
+    snap = CodexQuotaReader(tmp_path / 'sessions', app_server_reader=realtime).read_quota()
+
+    assert snap.primary.used_percent is None
+    assert snap.has_limit_signal is False
+    assert snap.note.startswith('未找到 session 文件')
+
+
+def test_realtime_reader_can_be_disabled_for_local_only_reads(tmp_path: Path) -> None:
+    path = tmp_path / 'sessions' / 'a.jsonl'
+    _write_jsonl(path, [_token_count(21, 43, limit_id='codex')])
+
+    snap = CodexQuotaReader(tmp_path / 'sessions', app_server_reader=None).read_quota()
+
+    assert snap.primary.used_percent == 21
+    assert snap.secondary.used_percent == 43
 
 
 def test_reads_latest_token_count(tmp_path: Path) -> None:

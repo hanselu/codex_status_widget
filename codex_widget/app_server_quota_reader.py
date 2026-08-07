@@ -32,16 +32,21 @@ class AppServerQuotaReader:
         *,
         executable: Path | str | None = None,
         home: Path | None = None,
+        include_path: bool = True,
         timeout_seconds: float = 8.0,
         process_factory: Callable[..., Any] = subprocess.Popen,
     ) -> None:
         self.executable = Path(executable) if executable is not None else None
         self.home = Path(home).expanduser() if home is not None else Path.home()
+        self.include_path = include_path
         self.timeout_seconds = timeout_seconds
         self._process_factory = process_factory
 
     def read_quota(self) -> QuotaSnapshot:
-        executable = self.executable or find_app_server_executable(self.home)
+        executable = self.executable or find_app_server_executable(
+            self.home,
+            include_path=self.include_path,
+        )
         if executable is None:
             raise AppServerQuotaError('未找到 codex app-server 可执行文件')
 
@@ -54,12 +59,15 @@ class AppServerQuotaReader:
         return _snapshot_from_response(result)
 
 
-def find_app_server_executable(home: Path | None = None) -> Path | None:
+def find_app_server_executable(home: Path | None = None, *, include_path: bool = True) -> Path | None:
     base = Path(home).expanduser() if home is not None else Path.home()
     for relative in APP_SERVER_RELATIVE_PATHS:
         candidate = base / relative
         if candidate.exists():
             return candidate
+
+    if not include_path:
+        return None
 
     found = shutil.which('codex')
     return Path(found) if found else None

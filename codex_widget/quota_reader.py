@@ -8,6 +8,7 @@ import re
 import sqlite3
 from typing import Any
 
+from .app_server_quota_reader import AppServerQuotaError, AppServerQuotaReader
 from .config import CONFIG_DIR
 from .models import QuotaSnapshot, QuotaWindow
 
@@ -49,6 +50,7 @@ QUOTA_CACHE_PATH = CONFIG_DIR / 'quota_cache.json'
 # Codex writes separate token_count pools. The desktop quota widget should show
 # the general Codex pool, not model-specific pools such as Codex-Spark.
 PREFERRED_LIMIT_ID = 'codex'
+_DEFAULT_APP_SERVER_READER = object()
 
 
 class CodexQuotaReader:
@@ -60,14 +62,31 @@ class CodexQuotaReader:
     files; that is handled by hook_state.py.
     """
 
-    def __init__(self, sessions_dir: Path, cache_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        sessions_dir: Path,
+        cache_path: Path | None = None,
+        app_server_reader: AppServerQuotaReader | None | object = _DEFAULT_APP_SERVER_READER,
+    ) -> None:
         self.sessions_dir = Path(sessions_dir).expanduser()
         self.cache_path = Path(cache_path).expanduser() if cache_path is not None else QUOTA_CACHE_PATH
+        if app_server_reader is _DEFAULT_APP_SERVER_READER:
+            app_server_home = _app_server_home_from_sessions_dir(self.sessions_dir)
+            self.app_server_reader: AppServerQuotaReader | None = AppServerQuotaReader(
+                home=app_server_home,
+                include_path=app_server_home == Path.home(),
+            )
+        else:
+            self.app_server_reader = app_server_reader
         self._last_quota_event: dict[str, Any] | None = None
         self._last_quota_file: Path | None = None
         self._last_quota_account_id: str | None = None
 
     def read_quota(self) -> QuotaSnapshot:
+        realtime = self._read_realtime_quota()
+        if realtime is not None:
+            return realtime
+
         latest_file = self._find_latest_jsonl()
         if latest_file is None:
             return QuotaSnapshot(
@@ -104,6 +123,14 @@ class CodexQuotaReader:
             has_limit_signal=has_limit_signal,
             note=note,
         )
+
+    def _read_realtime_quota(self) -> QuotaSnapshot | None:
+        if self.app_server_reader is None:
+            return None
+        try:
+            return self.app_server_reader.read_quota()
+        except AppServerQuotaError:
+            return None
 
     def _find_latest_jsonl(self) -> Path | None:
         files = self._find_latest_jsonl_files(limit=1)
@@ -366,6 +393,10 @@ def _select_latest_quota_result(
     selected_pool = non_zero_candidates or candidates
     selected = max(selected_pool, key=lambda result: _quota_result_timestamp(result))
     return selected[0], selected[1], selected[2]
+
+
+def _app_server_home_from_sessions_dir(sessions_dir: Path) -> Path:
+    return sessions_dir.expanduser().parent.parent
 
 
 def _quota_result_timestamp(result: tuple[dict[str, Any] | None, Path | None, str, float | None]) -> float:
