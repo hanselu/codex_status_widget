@@ -39,6 +39,17 @@ class _FakeProcess:
         return -9 if self.killed else 0
 
 
+class _FailingStdin(_CapturingStdin):
+    def write(self, s: str) -> int:
+        raise OSError('write failed for account_1234567890abcdef and acct_abcdef1234567890')
+
+
+class _WriteFailProcess(_FakeProcess):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.stdin = _FailingStdin()
+
+
 def _response(response_id: int, result: dict | None = None, error: dict | None = None) -> str:
     payload: dict = {'id': response_id}
     if error is not None:
@@ -133,7 +144,10 @@ def test_rate_limit_reached_type_sets_limit_signal() -> None:
 
 def test_start_failure_is_reported_safely() -> None:
     def fail_start(*args, **kwargs):
-        raise OSError('cannot start bearer sk-testsecret1234567890 for user@example.com')
+        raise OSError(
+            'cannot start bearer sk-testsecret1234567890 for user@example.com '
+            'account_1234567890abcdef acct_abcdef1234567890'
+        )
 
     reader = AppServerQuotaReader(
         executable=Path('codex.exe'),
@@ -147,7 +161,23 @@ def test_start_failure_is_reported_safely() -> None:
     assert '启动失败' in message
     assert 'sk-testsecret' not in message
     assert 'user@example.com' not in message
+    assert 'account_1234567890abcdef' not in message
+    assert 'acct_abcdef1234567890' not in message
     assert 'bearer' not in message.lower()
+
+
+def test_write_failure_is_reported_safely_and_process_is_cleaned_up() -> None:
+    process = _WriteFailProcess()
+
+    with pytest.raises(AppServerQuotaError) as exc_info:
+        _reader_with_process(process).read_quota()
+
+    message = str(exc_info.value)
+    assert '写入失败' in message
+    assert 'account_1234567890abcdef' not in message
+    assert 'acct_abcdef1234567890' not in message
+    assert process.killed is True
+    assert process.waited is True
 
 
 def test_json_rpc_error_is_redacted_and_process_is_cleaned_up() -> None:
@@ -159,7 +189,10 @@ def test_json_rpc_error_is_redacted_and_process_is_cleaned_up() -> None:
                 3,
                 error={
                     'code': 401,
-                    'message': 'auth failed for user@example.com bearer sess-secret1234567890',
+                    'message': (
+                        'auth failed for user@example.com bearer sess-secret1234567890 '
+                        'account_1234567890abcdef acct_abcdef1234567890'
+                    ),
                 },
             ),
         ]
@@ -172,6 +205,8 @@ def test_json_rpc_error_is_redacted_and_process_is_cleaned_up() -> None:
     assert '协议错误 401' in message
     assert 'user@example.com' not in message
     assert 'sess-secret' not in message
+    assert 'account_1234567890abcdef' not in message
+    assert 'acct_abcdef1234567890' not in message
     assert 'bearer' not in message.lower()
     assert process.killed is True
     assert process.waited is True
@@ -229,7 +264,13 @@ def test_process_exit_reports_redacted_stderr() -> None:
         def poll(self) -> int | None:
             return 1
 
-    process = _ExitedProcess([], ['fatal user@example.com bearer sess-secret1234567890'])
+    process = _ExitedProcess(
+        [],
+        [
+            'fatal user@example.com bearer sess-secret1234567890 '
+            'account_1234567890abcdef acct_abcdef1234567890'
+        ],
+    )
 
     with pytest.raises(AppServerQuotaError) as exc_info:
         _reader_with_process(process).read_quota()
@@ -238,4 +279,6 @@ def test_process_exit_reports_redacted_stderr() -> None:
     assert '已退出' in message
     assert 'user@example.com' not in message
     assert 'sess-secret' not in message
+    assert 'account_1234567890abcdef' not in message
+    assert 'acct_abcdef1234567890' not in message
     assert 'bearer' not in message.lower()

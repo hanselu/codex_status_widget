@@ -313,8 +313,13 @@ def _redact(value: str) -> str:
     redacted = value
     redacted = _redact_bearer(redacted)
     redacted = _redact_emails(redacted)
+    redacted = _redact_account_ids(redacted)
     redacted = _redact_tokens(redacted)
     return redacted
+
+
+def _redact_account_ids(value: str) -> str:
+    return re.sub(r'\b(?:account|acct)_[A-Za-z0-9_-]{8,}\b', '<account>', value)
 
 
 def _redact_bearer(value: str) -> str:
