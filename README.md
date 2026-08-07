@@ -5,9 +5,11 @@ Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Co
 这一版把“状态”和“额度”彻底分开：
 
 - **工作状态**：通过 Codex Hooks 主动上报到 `%USERPROFILE%\.codex_widget\hook_events.jsonl`
-- **额度信息**：优先读取 Codex 本地日志里的 `codex.rate_limits`，再回退到 `%USERPROFILE%\.codex\sessions\**\*.jsonl` 里的 `token_count` 事件
+- **额度信息**：优先通过独立 Codex app-server 实时查询主额度；实时查询不可用时，再回退到 Codex 本地日志里的 `codex.rate_limits`、`%USERPROFILE%\.codex\sessions\**\*.jsonl` 里的 `token_count` 事件和同账号缓存
 
 这样可以避免旧版用 session 文件修改时间判断状态时，长时间任务被误判成绿色的问题。
+
+常规额度查询会优先启动 `%USERPROFILE%\.codex\plugins\.plugin-appserver\codex.exe app-server --stdio`，并按 `initialize`、`initialized`、`account/read`、`account/rateLimits/read` 顺序读取实时额度。返回多个额度池时只优先使用 `limitId == "codex"` 的主额度池，避免误用 `codex_bengalfox` 等模型专属池。若 app-server 不存在、未登录、认证失败、网络失败、协议变化、超时或返回结构不可识别，小挂件不会把这些调试细节显示到面板上，而是自动沿用本地日志、session 或同账号缓存读取结果。程序不会显示、记录或缓存 token、完整账号 ID、邮箱或认证头。
 
 ## 状态灯规则
 
@@ -232,4 +234,4 @@ codex_status_widget/
 - Hook writer 不保存 prompt、tool input、tool output，只保存事件名、session id、turn id、cwd、model 等生命周期字段。
 - Hook writer 不输出 stdout，避免影响 Codex 上下文。
 - Hook writer 异常时返回 0，避免因为小挂件故障阻塞 Codex。
-- 挂件面板的常规额度读取只使用本地 Codex 日志和 `token_count`；只有用户主动点击“查询重置额度”时才读取本机 `access_token` 并请求 ChatGPT。程序不读取 Cookie、不会显示或持久化 token。
+- 挂件面板的常规额度读取优先使用独立 Codex app-server 实时查询；实时查询失败时回退到本地 Codex 日志、`token_count` 和同账号缓存。只有用户主动点击“查询重置额度”时才读取本机 `access_token` 并请求 ChatGPT。程序不读取 Cookie、不会显示或持久化 token。
