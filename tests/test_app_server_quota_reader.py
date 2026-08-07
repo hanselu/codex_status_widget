@@ -13,6 +13,8 @@ from codex_widget.app_server_quota_reader import (
     AppServerQuotaReader,
     find_app_server_executable,
 )
+from codex_widget.snapshot import CodexSnapshotReader
+from codex_widget.models import HookSignal
 
 
 class _CapturingStdin(io.StringIO):
@@ -140,6 +142,102 @@ def test_rate_limit_reached_type_sets_limit_signal() -> None:
     snap = _reader_with_process(process).read_quota()
 
     assert snap.has_limit_signal is True
+
+
+def test_prefers_codex_pool_from_rate_limits_by_limit_id() -> None:
+    result = _rate_limits_response()
+    result['rateLimits'] = {
+        'limitId': 'codex_bengalfox',
+        'primary': {'usedPercent': 0, 'windowDurationMins': 300, 'resetsAt': 1786169234},
+        'secondary': None,
+        'rateLimitReachedType': None,
+    }
+    result['rateLimitsByLimitId'] = {
+        'codex_bengalfox': result['rateLimits'],
+        'codex': {
+            'limitId': 'codex',
+            'primary': {'usedPercent': 98, 'windowDurationMins': 10080, 'resetsAt': 1786169234},
+            'secondary': None,
+            'rateLimitReachedType': None,
+        },
+    }
+    process = _FakeProcess([_response(1), _response(2), _response(3, result)])
+
+    snap = _reader_with_process(process).read_quota()
+
+    assert snap.primary.used_percent == 98
+    assert snap.primary.window_minutes == 10080
+    assert snap.secondary.used_percent is None
+
+
+def test_prefers_codex_pool_from_rate_limits_list_when_by_id_is_missing() -> None:
+    result = _rate_limits_response()
+    result['rateLimitsByLimitId'] = None
+    result['rateLimits'] = [
+        {
+            'limitId': 'codex_bengalfox',
+            'primary': {'usedPercent': 0, 'windowDurationMins': 300, 'resetsAt': 1786169234},
+            'secondary': None,
+            'rateLimitReachedType': None,
+        },
+        {
+            'limitId': 'codex',
+            'primary': {'usedPercent': 12, 'windowDurationMins': 10080, 'resetsAt': 1786169234},
+            'secondary': {
+                'usedPercent': 34,
+                'windowDurationMins': 300,
+                'resetsAt': '2026-08-08T01:02:03Z',
+            },
+            'rateLimitReachedType': None,
+        },
+    ]
+    process = _FakeProcess([_response(1), _response(2), _response(3, result)])
+
+    snap = _reader_with_process(process).read_quota()
+
+    assert snap.primary.used_percent == 12
+    assert snap.primary.window_minutes == 10080
+    assert snap.secondary.used_percent == 34
+    assert snap.secondary.window_minutes == 300
+    assert snap.secondary.resets_at is not None
+    assert snap.secondary.resets_at.astimezone().year == 2026
+
+
+def test_uses_top_level_rate_limits_as_compatibility_fallback() -> None:
+    result = _rate_limits_response()
+    result['rateLimitsByLimitId'] = None
+    result['rateLimits'] = {
+        'limitId': 'codex_bengalfox',
+        'primary': {'usedPercent': 7, 'windowDurationMins': 300, 'resetsAt': 1786169234},
+        'secondary': None,
+        'rateLimitReachedType': None,
+    }
+    process = _FakeProcess([_response(1), _response(2), _response(3, result)])
+
+    snap = _reader_with_process(process).read_quota()
+
+    assert snap.primary.used_percent == 7
+    assert snap.primary.window_minutes == 300
+
+
+def test_weekly_app_server_quota_still_displays_as_weekly(tmp_path: Path) -> None:
+    result = _rate_limits_response()
+    result['rateLimits'] = {
+        'limitId': 'codex',
+        'primary': {'usedPercent': 12, 'windowDurationMins': 10080, 'resetsAt': 1786169234},
+        'secondary': None,
+        'rateLimitReachedType': None,
+    }
+    process = _FakeProcess([_response(1), _response(2), _response(3, result)])
+    quota = _reader_with_process(process).read_quota()
+    reader = CodexSnapshotReader(tmp_path / 'sessions', tmp_path / 'hook_events.jsonl')
+    reader.quota_reader.read_quota = lambda: quota
+    reader.hook_reader.read_signal = lambda: HookSignal(status='idle')
+
+    snapshot = reader.read_snapshot()
+
+    assert snapshot.primary_title == '周额度'
+    assert snapshot.primary_text.startswith('周额度：88% ')
 
 
 def test_start_failure_is_reported_safely() -> None:

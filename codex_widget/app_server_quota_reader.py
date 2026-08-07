@@ -270,8 +270,20 @@ def _select_rate_limit_pool(result: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(preferred, dict):
             return preferred
 
-    rate_limits = result.get('rateLimits')
-    return rate_limits if isinstance(rate_limits, dict) else None
+    candidates = _rate_limit_candidates(result.get('rateLimits'))
+    for candidate in candidates:
+        if candidate.get('limitId') == PREFERRED_LIMIT_ID:
+            return candidate
+
+    return candidates[0] if candidates else None
+
+
+def _rate_limit_candidates(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return []
 
 
 def _quota_window_from_app_server(raw: Any) -> QuotaWindow:
@@ -279,20 +291,33 @@ def _quota_window_from_app_server(raw: Any) -> QuotaWindow:
         return QuotaWindow()
     return QuotaWindow(
         used_percent=_as_float(raw.get('usedPercent')),
-        resets_at=_parse_timestamp(raw.get('resetsAt')),
+        resets_at=_parse_reset_time(raw.get('resetsAt')),
         window_minutes=_as_int(raw.get('windowDurationMins')),
     )
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
+def _parse_reset_time(value: Any) -> datetime | None:
     if value is None:
         return None
-    if not isinstance(value, (int, float)):
-        return None
-    try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).astimezone()
-    except (OSError, ValueError):
-        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).astimezone()
+        except (OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.endswith('Z'):
+            raw = raw[:-1] + '+00:00'
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone()
+    return None
 
 
 def _as_float(value: Any) -> float | None:
