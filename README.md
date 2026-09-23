@@ -9,13 +9,15 @@ Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Co
 
 这样可以避免旧版用 session 文件修改时间判断状态时，长时间任务被误判成绿色的问题。
 
+0.3.9 修正了状态刷新延迟和任务结束识别：界面每 2～3 秒读取一次工作状态，额度查询在后台每至少 60 秒执行一次，网络等待不会阻塞状态灯。归档后的日志会从 `archived_sessions` 中继续查找；没有日志路径的 Hook 也会尝试按 session id 找回日志。对于没有 `Stop` 的临时会话，还会只读检查 `logs_2.sqlite` 中同一会话的明确关闭记录。
+
 常规额度查询会优先启动 `%USERPROFILE%\.codex\plugins\.plugin-appserver\codex.exe app-server --stdio`，并按 `initialize`、`initialized`、`account/read`、`account/rateLimits/read` 顺序读取实时额度。返回多个额度池时只优先使用 `limitId == "codex"` 的主额度池，避免误用 `codex_bengalfox` 等模型专属池。若 app-server 不存在、未登录、认证失败、网络失败、协议变化、超时或返回结构不可识别，小挂件不会把这些调试细节显示到面板上，而是自动沿用本地日志、session 或同账号缓存读取结果。程序不会显示、记录或缓存 token、完整账号 ID、邮箱或认证头。
 
 ## 状态灯规则
 
 | 颜色 | 状态 | 规则 |
 |---|---|---|
-| 绿色 | 闲置 | Hook 收到 `Stop`、transcript 已记录 `task_complete`，或没有活跃 turn |
+| 绿色 | 闲置 | Hook 收到 `Stop`、当前或归档 transcript 已记录 `task_complete` / `turn_aborted`、Codex 明确记录会话关闭，或没有活跃 turn |
 | 蓝色 | 工作中 | 有活跃 turn，包括生成响应、工具执行或子任务运行 |
 | 橙色 | 待确认 | Hook 收到 `PermissionRequest`，或 transcript 中出现尚未完成的 `require_escalated` 工具调用 |
 | 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来，或检测到明确 cooldown / quota / rate limit 错误 |
@@ -200,7 +202,8 @@ refresh_interval_seconds = 5
 - 安装 `UserPromptSubmit`、`PermissionRequest`、`PreToolUse`、`PostToolUse`、`SubagentStart`、`SubagentStop` 和 `Stop`，用于区分工作、待确认和闲置。
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
 - `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
-- 没有 `transcript_path` 的活跃事件无法二次确认完成状态，会在 30 秒后视为闲置，避免新版 ChatGPT App 中 Codex 的孤儿事件长期保持状态灯活跃。
+- 没有 `transcript_path` 时，不再在工具结束或 30 秒后直接视为闲置；先尝试找回日志，并检查同一会话的关闭记录。所有结束信号都缺失时，仍按 `stale_after_minutes` 兜底，无法仅凭静默时间确认任务已完成。
+- `refresh_interval_seconds` 为兼容旧配置保留；状态检查间隔最多 3 秒，后台额度查询间隔为 `max(60, refresh_interval_seconds)` 秒。右键“刷新”会立即请求更新额度，已有查询进行中时不会并发启动新查询。
 - `working_window_seconds` 只在 Hook 没安装或没被 trust 时作为回退判断使用。
 
 ## 文件说明

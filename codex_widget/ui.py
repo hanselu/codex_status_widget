@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
+import time
+
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QFontMetrics, QMouseEvent, QPainter, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -20,7 +23,7 @@ from . import __version__
 from .config import CONFIG_DIR, AppConfig
 from .codex_app import codex_app_is_running
 from .hook_installer import install_hooks, read_hook_setup_status
-from .models import CodexSnapshot, StatusName
+from .models import CodexSnapshot, QuotaSnapshot, StatusName
 from .reset_credits import (
     RESET_CREDITS_TIMEOUT_MS,
     RESET_CREDITS_URL,
@@ -77,6 +80,10 @@ class CodexWidget(QWidget):
         )
         self._drag_offset: QPoint | None = None
         self._last_snapshot: CodexSnapshot | None = None
+        self._quota = QuotaSnapshot()
+        self._quota_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='widget-quota')
+        self._quota_future: Future[QuotaSnapshot] | None = None
+        self._next_quota_refresh = 0.0
         self._note_display_text = ''
         self._network_manager = QNetworkAccessManager(self)
         self._reset_credits_reply: QNetworkReply | None = None
@@ -88,8 +95,11 @@ class CodexWidget(QWidget):
         self._restore_position()
 
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start(self.config.status.refresh_interval_seconds * 1000)
+        self.timer.timeout.connect(self._refresh_status)
+        # Existing configurations often use 60 seconds to limit quota requests.
+        # Keep status responsive independently of that slower network operation.
+        self.timer.start(min(self.config.status.refresh_interval_seconds, 3) * 1000)
+        QApplication.instance().aboutToQuit.connect(self._shutdown_quota_worker)
         self.refresh()
 
     def _build_window(self) -> None:
@@ -245,9 +255,31 @@ class CodexWidget(QWidget):
         self.tray.show()
 
     def refresh(self) -> None:
-        snapshot = self.reader.read_snapshot()
+        self._next_quota_refresh = 0.0
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        if self._quota_future is not None and self._quota_future.done():
+            try:
+                self._quota = self._quota_future.result()
+            except Exception:
+                # Keep the last quota if the background read unexpectedly fails.
+                # Status must remain usable even when quota cannot be obtained.
+                pass
+            self._quota_future = None
+
+        now = time.monotonic()
+        if self._quota_future is None and now >= self._next_quota_refresh:
+            self._quota_future = self._quota_executor.submit(self.reader.quota_reader.read_quota)
+            self._next_quota_refresh = now + max(60, self.config.status.refresh_interval_seconds)
+
+        snapshot = self.reader.read_snapshot(quota=self._quota)
         self._last_snapshot = snapshot
         self._apply_snapshot(snapshot)
+
+    def _shutdown_quota_worker(self) -> None:
+        self.timer.stop()
+        self._quota_executor.shutdown(wait=False, cancel_futures=True)
 
     def _apply_snapshot(self, snapshot: CodexSnapshot) -> None:
         color = STATUS_COLORS[snapshot.status]

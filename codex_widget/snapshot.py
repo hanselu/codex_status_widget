@@ -8,7 +8,7 @@ import time
 from .approval_state import PendingApproval, read_pending_approvals
 from .hook_installer import HookSetupStatus
 from .hook_state import HookStateReader
-from .models import CodexSnapshot, HookSignal, QuotaWindow, StatusName
+from .models import CodexSnapshot, HookSignal, QuotaSnapshot, QuotaWindow, StatusName
 from .quota_reader import CodexQuotaReader, format_reset_time, quota_is_exhausted, quota_text
 
 
@@ -28,14 +28,16 @@ class CodexSnapshotReader:
             hook_events_path,
             stale_after_minutes=hook_stale_after_minutes,
             max_events_to_read=hook_max_events_to_read,
+            sessions_dir=sessions_dir,
         )
         self.fallback_working_window_seconds = fallback_working_window_seconds
         self._codex_app_running = codex_app_running
         self._hook_setup_status_reader = hook_setup_status_reader
 
-    def read_snapshot(self) -> CodexSnapshot:
+    def read_snapshot(self, *, quota: QuotaSnapshot | None = None) -> CodexSnapshot:
         now = datetime.now().astimezone()
-        quota = self.quota_reader.read_quota()
+        if quota is None:
+            quota = self.quota_reader.read_quota()
         hook_signal = self.hook_reader.read_signal()
         pending_approvals = read_pending_approvals(
             self.quota_reader.sessions_dir,

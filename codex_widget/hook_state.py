@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from .models import HookSignal, HookSignalName
@@ -40,7 +42,6 @@ TRANSCRIPT_FINISHED_EVENTS = {
     'turn_aborted',
 }
 
-TRANSCRIPTLESS_STALE_AFTER_SECONDS = 30
 MAX_TRANSCRIPT_BYTES_TO_READ = 512 * 1024
 ACTIVE_STATUS_PRIORITY = ('waiting', 'working')
 ACTIVE_STATUSES = set(ACTIVE_STATUS_PRIORITY)
@@ -66,10 +67,12 @@ class HookStateReader:
         events_path: Path,
         stale_after_minutes: int = 360,
         max_events_to_read: int = 5000,
+        sessions_dir: Path | None = None,
     ) -> None:
         self.events_path = Path(events_path).expanduser()
         self.stale_after_minutes = stale_after_minutes
         self.max_events_to_read = max_events_to_read
+        self.sessions_dir = Path(sessions_dir).expanduser() if sessions_dir is not None else None
 
     def read_signal(self) -> HookSignal:
         events = self._read_events()
@@ -99,7 +102,7 @@ class HookStateReader:
 
         now = datetime.now(timezone.utc)
         self._apply_transcript_completion(sessions)
-        _expire_transcriptless_active_states(sessions, now)
+        self._apply_logged_shutdown(sessions, now)
 
         stale_cutoff = now - timedelta(minutes=self.stale_after_minutes)
 
@@ -222,7 +225,7 @@ class HookStateReader:
             state.note = ''
             return
         if event_name in BACK_TO_WORKING_EVENTS:
-            if state.status in ACTIVE_STATUSES and state.transcript_path:
+            if state.status in ACTIVE_STATUSES:
                 state.status = 'working'
             else:
                 state.status = 'idle'
@@ -239,16 +242,77 @@ class HookStateReader:
             return
 
     def _apply_transcript_completion(self, sessions: dict[str, _SessionState]) -> None:
+        candidates: list[Path] | None = None
         for state in sessions.values():
-            if state.status not in ACTIVE_STATUSES or not state.transcript_path or not state.turn_id:
+            if state.status not in ACTIVE_STATUSES or not state.turn_id:
                 continue
-            completed_at = _read_task_finished_at(Path(state.transcript_path), state.turn_id)
+            path = Path(state.transcript_path).expanduser() if state.transcript_path else None
+            paths = [path] if path is not None and path.is_file() else []
+            if not paths and self.sessions_dir is not None:
+                # Archiving moves the rollout without updating earlier hook paths.
+                # Build one index per read, also recovering paths omitted by hooks.
+                if candidates is None:
+                    candidates = []
+                    for directory in (self.sessions_dir, self.sessions_dir.parent / 'archived_sessions'):
+                        try:
+                            candidates.extend(directory.rglob('*.jsonl'))
+                        except OSError:
+                            continue
+                paths = [
+                    candidate for candidate in candidates
+                    if (path is not None and candidate.name == path.name)
+                    or (state.session_id and state.session_id != '__global__'
+                        and candidate.name.endswith(f'-{state.session_id}.jsonl'))
+                ]
+            completed_at = next(
+                (finished for candidate in paths
+                 if (finished := _read_task_finished_at(candidate, state.turn_id)) is not None),
+                None,
+            )
             if completed_at is None:
                 continue
             state.status = 'idle'
             state.last_event_name = 'TaskComplete'
             state.last_event_at = completed_at
             state.note = 'transcript 已记录结束，视为闲置'
+
+    def _apply_logged_shutdown(self, sessions: dict[str, _SessionState], now: datetime) -> None:
+        # Transient Codex sessions may omit both rollout paths and Stop hooks.
+        # An explicit core shutdown is stronger evidence than an inactivity timer.
+        if self.sessions_dir is None:
+            return
+        database = self.sessions_dir.parent / 'logs_2.sqlite'
+        if not database.is_file():
+            return
+        cutoff = now - timedelta(minutes=self.stale_after_minutes)
+        active = {
+            key: state for key, state in sessions.items()
+            if state.status in ACTIVE_STATUSES and state.last_event_at is not None
+            and state.last_event_at >= cutoff and key != '__global__'
+        }
+        if not active:
+            return
+        try:
+            with closing(sqlite3.connect(database.absolute().as_uri() + '?mode=ro', uri=True, timeout=0.1)) as connection:
+                for session_id, state in active.items():
+                    row = connection.execute(
+                        'SELECT ts, ts_nanos FROM logs WHERE thread_id = ? AND ts >= ? '
+                        'AND target = ? AND feedback_log_body LIKE ? '
+                        'ORDER BY ts DESC, ts_nanos DESC LIMIT 1',
+                        (session_id, int(state.last_event_at.timestamp()),
+                         'codex_core::session::handlers', '%: Shutting down Codex instance'),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    shutdown_at = _datetime_from_unix_seconds(row[0] + row[1] / 1_000_000_000)
+                    if shutdown_at is not None and shutdown_at >= state.last_event_at:
+                        state.status = 'idle'
+                        state.last_event_name = 'SessionShutdown'
+                        state.last_event_at = shutdown_at
+                        state.note = 'Codex 已记录会话关闭，视为闲置'
+        except (OSError, sqlite3.Error):
+            # Missing/changed diagnostics must not interrupt the hook reader.
+            return
 
 
 def _signal_from_state(
@@ -354,20 +418,6 @@ def _state_label(state: _SessionState) -> str:
     if state.session_id:
         return state.session_id[:8]
     return '未知对话'
-
-
-def _expire_transcriptless_active_states(sessions: dict[str, _SessionState], now: datetime) -> None:
-    cutoff = now - timedelta(seconds=TRANSCRIPTLESS_STALE_AFTER_SECONDS)
-    for state in sessions.values():
-        if (
-            state.status in ACTIVE_STATUSES
-            and not state.transcript_path
-            and state.last_event_at is not None
-            and state.last_event_at < cutoff
-        ):
-            state.status = 'idle'
-            state.last_event_name = f'{state.last_event_name}Expired' if state.last_event_name else 'ActiveExpired'
-            state.note = '无 transcript 的旧活跃状态已自动恢复闲置'
 
 
 def _read_task_finished_at(transcript_path: Path, turn_id: str) -> datetime | None:

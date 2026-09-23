@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import sqlite3
 from pathlib import Path
 
 from codex_widget.hook_state import HookStateReader
@@ -128,15 +129,18 @@ def test_post_tool_use_stays_working(tmp_path: Path) -> None:
     assert signal.last_event_name == 'PostToolUse'
 
 
-def test_transcriptless_post_tool_use_sets_idle(tmp_path: Path) -> None:
+def test_transcriptless_post_tool_use_keeps_working_until_stop(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='PreToolUse')
     _append(events, hook_event_name='PostToolUse')
 
     signal = HookStateReader(events).read_signal()
 
-    assert signal.status == 'idle'
+    assert signal.status == 'working'
     assert signal.last_event_name == 'PostToolUse'
+
+    _append(events, hook_event_name='Stop')
+    assert HookStateReader(events).read_signal().status == 'idle'
 
 
 def test_waiting_has_priority_over_working(tmp_path: Path) -> None:
@@ -257,17 +261,83 @@ def test_transcript_completion_for_other_turn_stays_working(tmp_path: Path) -> N
     assert signal.last_event_name == 'UserPromptSubmit'
 
 
-def test_transcriptless_working_expires_quickly(tmp_path: Path) -> None:
+def test_transcriptless_working_uses_normal_stale_cutoff(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     old = datetime.now(timezone.utc) - timedelta(seconds=31)
     _append(events, hook_event_name='UserPromptSubmit', recorded_at=old.isoformat())
 
     signal = HookStateReader(events, stale_after_minutes=360).read_signal()
 
+    assert signal.status == 'working'
+    assert signal.last_event_name == 'UserPromptSubmit'
+
+    _append(events, hook_event_name='PreToolUse',
+            recorded_at=(datetime.now(timezone.utc) - timedelta(hours=7)).isoformat())
+    assert HookStateReader(events).read_signal().status == 'idle'
+
+
+def test_archived_transcript_clears_aborted_turn(tmp_path: Path) -> None:
+    sessions = tmp_path / 'sessions'
+    old_path = sessions / '2026' / '09' / '24' / 'rollout-s1.jsonl'
+    archive = tmp_path / 'archived_sessions'
+    archive.mkdir()
+    _write_turn_aborted(archive / old_path.name, 't1')
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='PreToolUse', transcript_path=str(old_path))
+
+    signal = HookStateReader(events, sessions_dir=sessions).read_signal()
+
     assert signal.status == 'idle'
-    assert signal.last_event_name == 'UserPromptSubmitExpired'
-    assert '无 transcript' in signal.note
-    assert '自动恢复闲置' in signal.note
+    assert signal.last_event_name == 'TaskComplete'
+
+
+def test_missing_hook_path_finds_transcript_by_session(tmp_path: Path) -> None:
+    sessions = tmp_path / 'sessions'
+    sessions.mkdir()
+    _write_task_complete(sessions / 'rollout-s1.jsonl', 't1')
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='PreToolUse')
+
+    assert HookStateReader(events, sessions_dir=sessions).read_signal().status == 'idle'
+
+
+def test_archive_completion_does_not_clear_another_turn(tmp_path: Path) -> None:
+    archive = tmp_path / 'archived_sessions'
+    archive.mkdir()
+    _write_task_complete(archive / 'rollout-s1.jsonl', 'older-turn')
+    events = tmp_path / 'hook_events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit')
+
+    assert HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal().status == 'working'
+
+
+def test_logged_shutdown_clears_transcriptless_session_but_not_new_work(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('s1', int(now.timestamp()), now.microsecond * 1000,
+                            'codex_core::session::handlers',
+                            'session_loop: Shutting down Codex instance'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='PreToolUse',
+            recorded_at=(now - timedelta(minutes=5)).isoformat())
+    reader = HookStateReader(events, sessions_dir=tmp_path / 'sessions')
+    signal = reader.read_signal()
+    assert signal.status == 'idle'
+    assert signal.last_event_name == 'SessionShutdown'
+
+    _append(events, hook_event_name='UserPromptSubmit', turn_id='t2',
+            recorded_at=(now + timedelta(seconds=1)).isoformat())
+    assert reader.read_signal().status == 'working'
+
+
+def test_unreadable_diagnostic_database_does_not_break_hooks(tmp_path: Path) -> None:
+    (tmp_path / 'logs_2.sqlite').write_text('invalid database', encoding='utf-8')
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit')
+    assert HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal().status == 'working'
 
 
 def test_manual_idle_forces_idle(tmp_path: Path) -> None:

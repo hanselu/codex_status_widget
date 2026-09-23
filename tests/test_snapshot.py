@@ -9,6 +9,22 @@ from codex_widget.models import HookSignal, QuotaSnapshot, QuotaWindow
 from codex_widget.snapshot import CodexSnapshotReader
 
 
+def test_cached_quota_refreshes_status_without_querying_quota(tmp_path: Path) -> None:
+    reader = CodexSnapshotReader(tmp_path / 'sessions', tmp_path / 'events.jsonl')
+
+    def unexpected_query():
+        raise AssertionError('状态刷新不能同步查询额度')
+
+    reader.quota_reader.read_quota = unexpected_query
+    reader.hook_reader.read_signal = lambda: HookSignal(status='working')
+    quota = QuotaSnapshot(primary=QuotaWindow(used_percent=20, window_minutes=300))
+    assert reader.read_snapshot(quota=quota).status == 'working'
+    reader.hook_reader.read_signal = lambda: HookSignal(status='idle')
+    snapshot = reader.read_snapshot(quota=quota)
+    assert snapshot.status == 'idle'
+    assert snapshot.primary.used_percent == 20
+
+
 def _read_snapshot_for_windows(
     tmp_path: Path,
     primary: QuotaWindow,
@@ -525,7 +541,7 @@ def test_idle_cleanup_note_is_hidden_from_compact_widget(tmp_path: Path) -> None
         encoding='utf-8',
     )
 
-    old = datetime.now(timezone.utc) - timedelta(minutes=11)
+    old = datetime.now(timezone.utc) - timedelta(hours=7)
     events = tmp_path / 'hook_events.jsonl'
     events.write_text(
         json.dumps(
