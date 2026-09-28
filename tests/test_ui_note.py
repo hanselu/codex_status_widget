@@ -11,6 +11,7 @@ from codex_widget.ui import (
     _enable_inactive_tooltips,
     _format_display_note,
     _quota_display_parts,
+    _tray_quota_number,
     _version_menu_text,
 )
 
@@ -26,9 +27,13 @@ class _DummyWidget:
 class _TrayStub:
     def __init__(self) -> None:
         self.tooltip = ''
+        self.icons = []
 
     def setToolTip(self, text: str) -> None:
         self.tooltip = text
+
+    def setIcon(self, icon) -> None:  # noqa: ANN001
+        self.icons.append(icon)
 
 
 def _snapshot(
@@ -82,6 +87,50 @@ def test_quota_display_parts_separate_percentage_and_reset_time() -> None:
     assert _quota_display_parts('周额度：46% 7-12 16:23', '周额度') == ('46%', '7-12 16:23')
     assert _quota_display_parts('5小时：未读取 未知', '5小时') == ('未读取', '未知')
     assert _quota_display_parts('未读取', '5小时') == ('未读取', '')
+
+
+def test_tray_quota_prefers_five_hour_then_weekly() -> None:
+    five_hour = QuotaWindow(used_percent=26, window_minutes=300)
+    weekly = QuotaWindow(used_percent=40, window_minutes=10080)
+    snapshot = _snapshot(
+        primary_title='周额度', primary=weekly, primary_text='周额度：60% 未知',
+        primary_visible=True, secondary_title='5小时', secondary=five_hour,
+        secondary_text='5小时：74% 未知', secondary_visible=True,
+    )
+    assert _tray_quota_number(snapshot) == '74'
+
+    snapshot.secondary = QuotaWindow(window_minutes=300)
+    assert _tray_quota_number(snapshot) == '60'
+
+    snapshot.primary = QuotaWindow()
+    assert _tray_quota_number(snapshot) == '--'
+
+
+def test_tray_icon_updates_when_quota_or_status_changes() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+    widget.tray = _TrayStub()
+    widget._tray_icon_key = None
+    snapshot = _snapshot(
+        primary_title='5小时', primary=QuotaWindow(used_percent=26, window_minutes=300),
+        primary_text='5小时：74% 未知', primary_visible=True,
+    )
+
+    CodexWidget._set_tray_icon(widget, snapshot)
+    assert widget._tray_icon_key == ('idle', '74')
+    assert widget.tray.icons[0].availableSizes()
+    CodexWidget._set_tray_icon(widget, snapshot)
+    assert len(widget.tray.icons) == 1
+
+    snapshot.primary.used_percent = 30
+    CodexWidget._set_tray_icon(widget, snapshot)
+    assert widget._tray_icon_key == ('idle', '70')
+    snapshot.status = 'working'
+    CodexWidget._set_tray_icon(widget, snapshot)
+    assert widget._tray_icon_key == ('working', '70')
+    assert len(widget.tray.icons) == 3
+    widget.close()
+    assert app is not None
 
 
 def test_quota_rows_place_percentage_in_far_right_column() -> None:

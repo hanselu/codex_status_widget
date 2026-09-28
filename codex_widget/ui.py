@@ -3,8 +3,8 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 import time
 
-from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QFontMetrics, QMouseEvent, QPainter, QPixmap
+from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QFontMetrics, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
@@ -84,6 +84,7 @@ class CodexWidget(QWidget):
         self._quota_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='widget-quota')
         self._quota_future: Future[QuotaSnapshot] | None = None
         self._next_quota_refresh = 0.0
+        self._tray_icon_key: tuple[StatusName, str] | None = None
         self._note_display_text = ''
         self._network_manager = QNetworkAccessManager(self)
         self._reset_credits_reply: QNetworkReply | None = None
@@ -251,7 +252,7 @@ class CodexWidget(QWidget):
         self.tray.setToolTip('Codex 状态')
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._on_tray_activated)
-        self._set_tray_icon('idle')
+        self._set_tray_icon(None)
         self.tray.show()
 
     def refresh(self) -> None:
@@ -328,7 +329,7 @@ class CodexWidget(QWidget):
         )
         self.note_label.setVisible(bool(snapshot.note))
         self._resize_to_content()
-        self._set_tray_icon(snapshot.status)
+        self._set_tray_icon(snapshot)
         self.tray.setToolTip(tooltip_text)
 
     def _resize_to_content(self) -> None:
@@ -530,20 +531,47 @@ class CodexWidget(QWidget):
                 self.raise_()
                 self.activateWindow()
 
-    def _set_tray_icon(self, status: StatusName) -> None:
-        self.tray.setIcon(_make_dot_icon(STATUS_COLORS[status]))
+    def _set_tray_icon(self, snapshot: CodexSnapshot | None) -> None:
+        status = snapshot.status if snapshot is not None else 'idle'
+        number = _tray_quota_number(snapshot) if snapshot is not None else '--'
+        key = (status, number)
+        if key == self._tray_icon_key:
+            return
+        self.tray.setIcon(_make_tray_icon(STATUS_COLORS[status], number))
+        self._tray_icon_key = key
 
 
-def _make_dot_icon(color: str) -> QIcon:
-    pixmap = QPixmap(32, 32)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(color))
-    painter.setPen(QColor(255, 255, 255, 170))
-    painter.drawEllipse(5, 5, 22, 22)
-    painter.end()
-    return QIcon(pixmap)
+def _tray_quota_number(snapshot: CodexSnapshot) -> str:
+    for minutes in (300, 10080):
+        for window in (snapshot.primary, snapshot.secondary):
+            if window.window_minutes == minutes and window.remaining_percent is not None:
+                return str(int(min(100, window.remaining_percent) + 0.5))
+    return '--'
+
+
+def _make_tray_icon(color: str, number: str) -> QIcon:
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        stroke = max(2.0, size * 0.105)
+        inset = stroke / 2 + 0.5
+        painter.setPen(QPen(QColor(color), stroke))
+        painter.setBrush(QColor('#20242c'))
+        painter.drawEllipse(QRectF(inset, inset, size - 2 * inset, size - 2 * inset))
+        painter.setPen(QColor('white'))
+        font = painter.font()
+        font.setBold(True)
+        font.setPixelSize(round(size * 0.54))
+        while QFontMetrics(font).horizontalAdvance(number) > size * 0.72:
+            font.setPixelSize(font.pixelSize() - 1)
+        painter.setFont(font)
+        painter.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, number)
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 def _version_menu_text() -> str:
