@@ -90,8 +90,20 @@ Invoke-Step '检查工具和输入文件' {
 
 if (-not $SkipTests) {
     Invoke-Step '运行测试' {
-        uv run pytest
-        Assert-NativeSuccess 'uv run pytest'
+        $pytestPath = Join-Path $ProjectRoot '.venv\Scripts\pytest.exe'
+        $pytestTempDir = Join-Path $ProjectRoot '.pytest_tmp_nuitka'
+        if (-not (Test-Path -LiteralPath $pytestPath)) {
+            throw "找不到 pytest：$pytestPath，请先运行 uv sync"
+        }
+
+        try {
+            & $pytestPath "--basetemp=$pytestTempDir"
+            Assert-NativeSuccess 'pytest'
+        } finally {
+            if (Test-Path -LiteralPath $pytestTempDir) {
+                Remove-Item -LiteralPath $pytestTempDir -Recurse -Force
+            }
+        }
     }
 }
 
