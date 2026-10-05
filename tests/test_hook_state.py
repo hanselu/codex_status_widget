@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from codex_widget.hook_state import HookStateReader
 
 
@@ -331,6 +333,70 @@ def test_logged_shutdown_clears_transcriptless_session_but_not_new_work(tmp_path
     _append(events, hook_event_name='UserPromptSubmit', turn_id='t2',
             recorded_at=(now + timedelta(seconds=1)).isoformat())
     assert reader.read_signal().status == 'working'
+
+
+@pytest.mark.parametrize(
+    ('logged_turn', 'shutdown_offset', 'expected_status'),
+    [
+        ('t1', 1, 'idle'),
+        ('other-turn', 1, 'working'),
+        ('t1-suffix', 1, 'working'),
+        ('t1', None, 'working'),
+        ('t1', -0.1, 'working'),
+    ],
+)
+def test_logged_shutdown_matches_internal_session_by_exact_turn(
+    tmp_path: Path, logged_turn: str, shutdown_offset: float | None, expected_status: str
+) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=500000)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('internal-session', int(now.timestamp()), now.microsecond * 1000,
+                            'codex_core::session::turn',
+                            f'turn{{thread.id=internal-session turn.id={logged_turn} model=gpt-test}}: '
+                            'post sampling token usage'))
+        if shutdown_offset is not None:
+            shutdown_at = now + timedelta(seconds=shutdown_offset)
+            connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                               ('internal-session', int(shutdown_at.timestamp()),
+                                shutdown_at.microsecond * 1000, 'codex_core::session::handlers',
+                                'session_loop: Shutting down Codex instance'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='PreToolUse', recorded_at=now.isoformat())
+    _append(events, hook_event_name='PostToolUse', recorded_at=now.isoformat())
+    reader = HookStateReader(events, sessions_dir=tmp_path / 'sessions')
+
+    signal = reader.read_signal()
+
+    assert signal.status == expected_status
+    if expected_status == 'idle':
+        assert signal.last_event_name == 'SessionShutdown'
+
+    _append(events, hook_event_name='UserPromptSubmit', turn_id='new-turn',
+            recorded_at=(now + timedelta(seconds=2)).isoformat())
+    assert reader.read_signal().status == 'working'
+
+
+def test_ambiguous_internal_session_mapping_stays_working(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        for internal_session in ('internal-a', 'internal-b'):
+            connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                               (internal_session, int(now.timestamp()), now.microsecond * 1000,
+                                'codex_core::session::turn',
+                                f'turn{{thread.id={internal_session} turn.id=t1 model=gpt-test}}'))
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('internal-a', int(now.timestamp()) + 1, 0,
+                            'codex_core::session::handlers',
+                            'session_loop: Shutting down Codex instance'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='PreToolUse', recorded_at=now.isoformat())
+
+    assert HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal().status == 'working'
 
 
 def test_unreadable_diagnostic_database_does_not_break_hooks(tmp_path: Path) -> None:

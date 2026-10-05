@@ -294,14 +294,31 @@ class HookStateReader:
             return
         try:
             with closing(sqlite3.connect(database.absolute().as_uri() + '?mode=ro', uri=True, timeout=0.1)) as connection:
+                shutdown_query = (
+                    'SELECT ts, ts_nanos FROM logs WHERE thread_id = ? AND ts >= ? '
+                    'AND target = ? AND feedback_log_body LIKE ? '
+                    'ORDER BY ts DESC, ts_nanos DESC LIMIT 1'
+                )
                 for session_id, state in active.items():
+                    shutdown_params = (
+                        int(state.last_event_at.timestamp()),
+                        'codex_core::session::handlers', '%: Shutting down Codex instance',
+                    )
                     row = connection.execute(
-                        'SELECT ts, ts_nanos FROM logs WHERE thread_id = ? AND ts >= ? '
-                        'AND target = ? AND feedback_log_body LIKE ? '
-                        'ORDER BY ts DESC, ts_nanos DESC LIMIT 1',
-                        (session_id, int(state.last_event_at.timestamp()),
-                         'codex_core::session::handlers', '%: Shutting down Codex instance'),
+                        shutdown_query, (session_id, *shutdown_params),
                     ).fetchone()
+                    if row is None and state.turn_id:
+                        # 后台任务的 hook 会话编号可能与 core 日志不同，用完整轮次编号关联。
+                        linked_sessions = connection.execute(
+                            'SELECT DISTINCT thread_id FROM logs WHERE ts >= ? AND target = ? '
+                            'AND thread_id IS NOT NULL AND instr(feedback_log_body, ?) > 0 LIMIT 2',
+                            (shutdown_params[0], 'codex_core::session::turn',
+                             f' turn.id={state.turn_id} '),
+                        ).fetchall()
+                        if len(linked_sessions) == 1:
+                            row = connection.execute(
+                                shutdown_query, (linked_sessions[0][0], *shutdown_params),
+                            ).fetchone()
                     if row is None:
                         continue
                     shutdown_at = _datetime_from_unix_seconds(row[0] + row[1] / 1_000_000_000)

@@ -29,6 +29,8 @@ Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Co
 
 0.4.0 放大了托盘图标中央的额度数字。
 
+0.4.1 修复后台任务结束后仍显示蓝灯的问题：当 Hook 与运行日志的会话编号不一致时，通过任务轮次编号关联明确的关闭记录。
+
 除“无额度”会触发红灯外，额度百分比不影响工作状态。
 
 ## 安装依赖
@@ -207,6 +209,7 @@ refresh_interval_seconds = 5
 - `hook_events.jsonl` 超过约 256KB 时会自动压缩，只保留最近 500 条事件。
 - `stale_after_minutes` 是 Hook 没收到 `Stop` 且 transcript 也没有完成记录时的兜底过期时间，默认 360 分钟。
 - 没有 `transcript_path` 时，不再在工具结束或 30 秒后直接视为闲置；先尝试找回日志，并检查同一会话的关闭记录。所有结束信号都缺失时，仍按 `stale_after_minutes` 兜底，无法仅凭静默时间确认任务已完成。
+- 后台任务的 Hook 会话编号与关闭日志编号不同时，通过完整的任务轮次编号关联；只有唯一匹配且关闭时间不早于最后一次活动时，才恢复闲置。
 - `refresh_interval_seconds` 为兼容旧配置保留；状态检查间隔最多 3 秒，后台额度查询间隔为 `max(60, refresh_interval_seconds)` 秒。右键“刷新”会立即请求更新额度，已有查询进行中时不会并发启动新查询。
 - `working_window_seconds` 只在 Hook 没安装或没被 trust 时作为回退判断使用。
 
