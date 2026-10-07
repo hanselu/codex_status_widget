@@ -7,10 +7,10 @@ from codex_widget.codex_app import codex_app_is_running
 from codex_widget.config import AppConfig
 from codex_widget.hook_installer import install_hooks, read_hook_setup_status, uninstall_hooks
 from codex_widget.snapshot import CodexSnapshotReader
+from codex_widget.models import CodexSnapshot
 
 
-def print_once() -> int:
-    config = AppConfig.load()
+def read_snapshot(config: AppConfig) -> CodexSnapshot:
     reader = CodexSnapshotReader(
         sessions_dir=config.codex.sessions_dir,
         hook_events_path=config.hook.events_path,
@@ -20,7 +20,11 @@ def print_once() -> int:
         codex_app_running=codex_app_is_running,
         hook_setup_status_reader=read_hook_setup_status,
     )
-    snapshot = reader.read_snapshot()
+    return reader.read_snapshot()
+
+
+def print_once() -> int:
+    snapshot = read_snapshot(AppConfig.load())
 
     print(f'状态：{snapshot.status_text}')
     if snapshot.primary_visible:
@@ -37,6 +41,30 @@ def print_once() -> int:
         print(f'额度来源：{snapshot.quota_file}')
     if snapshot.hook_signal.events_path:
         print(f'hook 事件：{snapshot.hook_signal.events_path}')
+    return 0
+
+
+def screen_once() -> int:
+    from codex_widget.gem12_screen import Screen
+    from PySide6.QtGui import QGuiApplication
+
+    from codex_widget.config import CONFIG_DIR
+    from codex_widget.screen_output import pillow_image, save_screen_image
+    from codex_widget.screen_renderer import frame_from_snapshot, render_screen
+
+    app = QGuiApplication.instance() or QGuiApplication([])
+    config = AppConfig.load()
+    image = render_screen(frame_from_snapshot(read_snapshot(config)))
+    path = CONFIG_DIR / 'gem12-status.png'
+    save_screen_image(image, path)
+    try:
+        with Screen.connect(config.screen.port or None) as screen:
+            packets = screen.show(pillow_image(image))
+            print(f'已推送至 {screen.port}：960×376，{packets} 个数据块')
+    except Exception as exc:
+        print(f'屏幕推送失败：{exc}', file=sys.stderr)
+        return 1
+    print(f'图片：{path}')
     return 0
 
 
@@ -61,6 +89,7 @@ def uninstall_hook() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description='Codex 状态与额度桌面小挂件')
     parser.add_argument('--once', action='store_true', help='只在控制台读取并打印一次，不启动窗口')
+    parser.add_argument('--screen-once', action='store_true', help='读取一次真实状态，生成图片并推送至 GEM12 屏幕')
     parser.add_argument('--install-hook', action='store_true', help='安装/刷新 Codex hook 配置')
     parser.add_argument('--uninstall-hook', action='store_true', help='从 hooks.json 移除本工具的 hook')
     args = parser.parse_args()
@@ -71,6 +100,8 @@ def main() -> int:
         return uninstall_hook()
     if args.once:
         return print_once()
+    if args.screen_once:
+        return screen_once()
 
     from codex_widget.app import run_app
 

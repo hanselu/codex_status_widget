@@ -33,6 +33,7 @@ from .reset_credits import (
     read_access_token,
 )
 from .snapshot import CodexSnapshotReader
+from .screen_output import ScreenOutput
 
 
 STATUS_COLORS: dict[StatusName, str] = {
@@ -88,6 +89,9 @@ class CodexWidget(QWidget):
         self._note_display_text = ''
         self._network_manager = QNetworkAccessManager(self)
         self._reset_credits_reply: QNetworkReply | None = None
+        self._screen_output: ScreenOutput | None = None
+        if self.config.screen.enabled:
+            self._screen_output = ScreenOutput(CONFIG_DIR / 'gem12-status.png', self.config.screen.port)
 
         self._build_window()
         self._build_ui()
@@ -238,6 +242,16 @@ class CodexWidget(QWidget):
         self.menu.addAction(self.open_state_action)
 
         self.menu.addSeparator()
+        self.screen_action = QAction('推送至 GEM12 屏幕', self)
+        self.screen_action.setCheckable(True)
+        self.screen_action.setChecked(self.config.screen.enabled)
+        self.screen_action.toggled.connect(self.toggle_screen_output)
+        self.menu.addAction(self.screen_action)
+        self.screen_status_action = QAction('屏幕：未启用', self)
+        self.screen_status_action.setEnabled(False)
+        self.menu.addAction(self.screen_status_action)
+
+        self.menu.addSeparator()
 
         self.version_action = QAction(_version_menu_text(), self)
         self.version_action.setEnabled(False)
@@ -277,10 +291,29 @@ class CodexWidget(QWidget):
         snapshot = self.reader.read_snapshot(quota=self._quota)
         self._last_snapshot = snapshot
         self._apply_snapshot(snapshot)
+        if self._screen_output is not None:
+            self._screen_output.update(snapshot)
+            self.screen_status_action.setText(self._screen_output.status_text)
+
+    def toggle_screen_output(self, enabled: bool) -> None:
+        self.config.screen.enabled = enabled
+        self.config.save()
+        if self._screen_output is not None:
+            self._screen_output.close()
+            self._screen_output = None
+        if enabled:
+            self._screen_output = ScreenOutput(CONFIG_DIR / 'gem12-status.png', self.config.screen.port)
+            if self._last_snapshot is not None:
+                self._screen_output.update(self._last_snapshot)
+            self.screen_status_action.setText(self._screen_output.status_text)
+        else:
+            self.screen_status_action.setText('屏幕：未启用')
 
     def _shutdown_quota_worker(self) -> None:
         self.timer.stop()
         self._quota_executor.shutdown(wait=False, cancel_futures=True)
+        if self._screen_output is not None:
+            self._screen_output.close()
 
     def _apply_snapshot(self, snapshot: CodexSnapshot) -> None:
         color = STATUS_COLORS[snapshot.status]

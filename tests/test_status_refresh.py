@@ -90,3 +90,58 @@ def test_failed_quota_keeps_previous_value_and_status_responsive(widget_factory)
     assert widget._last_snapshot.status == 'waiting'
     assert widget._last_snapshot.primary.used_percent == 40
     assert widget._quota_future is None
+
+
+def test_screen_receives_same_live_snapshot_and_closes_with_widget(widget_factory):
+    widget, reader = widget_factory(lambda: QuotaSnapshot())
+    received = []
+
+    class Output:
+        status_text = '屏幕：测试已推送'
+        closed = False
+
+        def update(self, snapshot):
+            received.append(snapshot)
+
+        def close(self):
+            self.closed = True
+
+    output = Output()
+    widget._screen_output = output
+    reader.hook_reader.read_signal = lambda: HookSignal(status='waiting', waiting_count=1)
+    widget._refresh_status()
+    assert received[-1] is widget._last_snapshot
+    assert received[-1].status == 'waiting'
+    assert widget.screen_status_action.text() == output.status_text
+    widget._shutdown_quota_worker()
+    assert output.closed
+
+
+def test_screen_toggle_persists_and_releases_output(widget_factory, monkeypatch):
+    widget, reader = widget_factory(lambda: QuotaSnapshot())
+    saves = []
+    monkeypatch.setattr(AppConfig, 'save', lambda config: saves.append(config.screen.enabled))
+    outputs = []
+
+    class Output:
+        status_text = '屏幕：测试已推送'
+
+        def __init__(self, path, port):
+            self.received = []
+            self.closed = False
+            outputs.append(self)
+
+        def update(self, snapshot):
+            self.received.append(snapshot)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr('codex_widget.ui.ScreenOutput', Output)
+    widget.screen_action.setChecked(True)
+    assert saves == [True]
+    assert outputs[0].received == [widget._last_snapshot]
+    widget.screen_action.setChecked(False)
+    assert saves == [True, False]
+    assert outputs[0].closed
+    assert widget._screen_output is None

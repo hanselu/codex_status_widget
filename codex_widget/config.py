@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import tomllib
 
@@ -42,11 +42,18 @@ class StatusConfig:
 
 
 @dataclass(slots=True)
+class ScreenConfig:
+    enabled: bool = False
+    port: str = ''
+
+
+@dataclass(slots=True)
 class AppConfig:
     codex: CodexConfig
     hook: HookConfig
     ui: UiConfig
     status: StatusConfig
+    screen: ScreenConfig = field(default_factory=ScreenConfig)
 
     @classmethod
     def default(cls) -> 'AppConfig':
@@ -74,6 +81,7 @@ class AppConfig:
         hook_data = data.get('hook', {}) if isinstance(data, dict) else {}
         ui_data = data.get('ui', {}) if isinstance(data, dict) else {}
         status_data = data.get('status', {}) if isinstance(data, dict) else {}
+        screen_data = data.get('screen', {}) if isinstance(data, dict) else {}
 
         sessions_dir_raw = codex_data.get('sessions_dir')
         if isinstance(sessions_dir_raw, str) and sessions_dir_raw.strip():
@@ -102,6 +110,11 @@ class AppConfig:
         config.status.refresh_interval_seconds = _int_in_range(
             status_data.get('refresh_interval_seconds'), config.status.refresh_interval_seconds, 2, 300
         )
+        if isinstance(screen_data, dict):
+            config.screen.enabled = _bool_value(screen_data.get('enabled'), False)
+            port = screen_data.get('port')
+            if isinstance(port, str):
+                config.screen.port = port.strip()
         return config
 
     def save(self) -> None:
@@ -128,6 +141,10 @@ class AppConfig:
             '[status]\n'
             f'working_window_seconds = {self.status.working_window_seconds}\n'
             f'refresh_interval_seconds = {self.status.refresh_interval_seconds}\n'
+            '\n'
+            '[screen]\n'
+            f'enabled = {str(self.screen.enabled).lower()}\n'
+            f'port = "{_toml_escape(self.screen.port)}"\n'
         )
         CONFIG_PATH.write_text(text, encoding='utf-8')
 

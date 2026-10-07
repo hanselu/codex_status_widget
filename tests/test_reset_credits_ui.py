@@ -10,6 +10,7 @@ from PySide6.QtNetwork import QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from codex_widget.reset_credits import RESET_CREDITS_TIMEOUT_MS, RESET_CREDITS_URL
+from codex_widget.config import AppConfig
 from codex_widget.ui import CodexWidget
 
 
@@ -64,6 +65,8 @@ def test_menu_contains_reset_credit_query_action() -> None:
     widget.install_hook_to_codex = lambda: None
     widget.open_sessions_dir = lambda: None
     widget.open_state_dir = lambda: None
+    widget.config = AppConfig.default()
+    widget.toggle_screen_output = lambda enabled: None
 
     CodexWidget._build_menu(widget)
     matches = [action for action in widget.menu.actions() if action.text() == '查询重置额度']
