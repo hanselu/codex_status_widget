@@ -5,7 +5,7 @@ from datetime import datetime
 import math
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen, QRadialGradient
 
 from .models import CodexSnapshot, StatusName
 
@@ -150,10 +150,21 @@ def render_screen(frame: ScreenFrame) -> QImage:
                 painter.drawArc(ring, 90 * 16, -round(360 * 16 * quota.remaining / 100))
             number = '--' if quota.remaining is None else str(quota.remaining)
             size = 70 if two_columns else 62
-            # Reserve the percent sign separately so the number remains prominent.
-            _text(painter, QRectF(cx - 76, 159, 131, 96), number, size, medium=True)
+            number_font = QFont('Microsoft YaHei UI')
+            number_font.setPixelSize(size)
+            number_font.setWeight(QFont.Weight.Medium)
+            number_width = QFontMetricsF(number_font).horizontalAdvance(number)
+            percent_font = QFont('Microsoft YaHei UI')
+            percent_font.setPixelSize(25)
+            percent_width = QFontMetricsF(percent_font).horizontalAdvance('%')
+            gap = 6
+            group_width = number_width
             if quota.remaining is not None:
-                _text(painter, QRectF(cx + 54, 199, 29, 36), '%', 25, MUTED)
+                group_width += gap + percent_width
+            left = cx - group_width / 2
+            _text(painter, QRectF(left, 159, number_width, 96), number, size, medium=True)
+            if quota.remaining is not None:
+                _text(painter, QRectF(left + number_width + gap, 199, percent_width, 36), '%', 25, MUTED)
             _text(painter, QRectF(cx - 148, 312, 296, 36), quota.reset, 21, MUTED)
     finally:
         painter.end()
