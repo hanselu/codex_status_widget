@@ -4,11 +4,11 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "codex-status-widget"
-version = "0.5.0"
+version = "0.5.1"
 source = { virtual = "." }
 dependencies = [
+    { name = "gem12-screen" },
     { name = "pillow" },
-    { name = "pyserial" },
     { name = "pyside6" },
 ]
 
@@ -21,8 +21,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "gem12-screen", specifier = ">=0.1.0", index = "https://pypi.org/simple" },
     { name = "pillow", specifier = ">=11.0" },
-    { name = "pyserial", specifier = ">=3.5" },
     { name = "pyside6", specifier = ">=6.7" },
 ]
 
@@ -40,6 +40,19 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6" },
+]
+
+[[package]]
+name = "gem12-screen"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pillow" },
+    { name = "pyserial" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e8/df/5e5604ebb10afa5529ce6b7e9109cf0cd7f776021cd8892e360029ca5337/gem12_screen-0.1.0.tar.gz", hash = "sha256:52c415d608e12299650bf06de4635ce1969c71a450f21a9a6adbb679e459637b", size = 595701, upload-time = "2026-10-08T20:32:25.884Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/88/6f15c87009bcf27742ced0df1fde67b56c952194ea15f8f4aae98363f58e/gem12_screen-0.1.0-py3-none-any.whl", hash = "sha256:e165a88b2178ce2f5fc014d6146b7dba94a8338f1ed1bf9b3c40bbcb602a1f7d", size = 586051, upload-time = "2026-10-08T20:32:24.374Z" },
 ]
 
 [[package]]

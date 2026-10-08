@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from threading import Event, get_ident
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -12,6 +13,7 @@ from codex_widget.config import AppConfig
 from codex_widget.models import CodexSnapshot, HookSignal, QuotaWindow
 from codex_widget.screen_output import ScreenOutput, pillow_image, save_screen_image
 from codex_widget.screen_renderer import frame_from_snapshot, render_screen
+import main
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -92,6 +94,32 @@ class FakeScreen:
     def close(self):
         self.closed = True
         self.threads.append(get_ident())
+
+
+@pytest.mark.parametrize('port', ['', 'COM3'])
+def test_screen_once_uses_installed_library(tmp_path, monkeypatch, capsys, port):
+    config = AppConfig.default()
+    config.screen.port = port
+    monkeypatch.setattr(main.AppConfig, 'load', lambda: config)
+    monkeypatch.setattr(main, 'read_snapshot', lambda config: snapshot())
+    monkeypatch.setattr('codex_widget.config.CONFIG_DIR', tmp_path)
+    device = MagicMock()
+    device.__enter__.return_value = device
+    device.port = 'COM_TEST'
+    device.show.return_value = 15360
+    connect = MagicMock(return_value=device)
+    monkeypatch.setattr('gem12_screen.Screen.connect', connect)
+
+    assert main.screen_once() == 0
+
+    connect.assert_called_once_with(port or None)
+    device.show.assert_called_once()
+    image = device.show.call_args.args[0]
+    assert isinstance(image, Image.Image)
+    assert image.size == (960, 376)
+    device.__exit__.assert_called_once_with(None, None, None)
+    assert (tmp_path / 'gem12-status.png').is_file()
+    assert '已推送至 COM_TEST：960×376，15360 个数据块' in capsys.readouterr().out
 
 
 def test_slow_push_keeps_ui_free_and_only_latest_pending_frame(tmp_path, monkeypatch):

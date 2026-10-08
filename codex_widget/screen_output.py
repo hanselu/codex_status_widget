@@ -5,11 +5,11 @@ from pathlib import Path
 import time
 
 from PIL import Image
+from gem12_screen import Screen
 from PySide6.QtCore import QIODevice, QSaveFile
 from PySide6.QtGui import QImage
 
 from .models import CodexSnapshot
-from .gem12_screen import Screen
 from .screen_renderer import ScreenFrame, frame_from_snapshot, render_screen
 
 

@@ -1,12 +1,12 @@
 [project]
 name = "codex-status-widget"
-version = "0.5.0"
+version = "0.5.1"
 description = "Codex status and quota widget for the ChatGPT desktop app on Windows"
 requires-python = ">=3.12"
 dependencies = [
   "PySide6>=6.7",
+  "gem12-screen>=0.1.0",
   "pillow>=11.0",
-  "pyserial>=3.5",
 ]
 
 [dependency-groups]
@@ -19,3 +19,11 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+gem12-screen = { index = "pypi" }
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+explicit = true

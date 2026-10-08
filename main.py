@@ -45,7 +45,7 @@ def print_once() -> int:
 
 
 def screen_once() -> int:
-    from codex_widget.gem12_screen import Screen
+    from gem12_screen import Screen
     from PySide6.QtGui import QGuiApplication
 
     from codex_widget.config import CONFIG_DIR
