@@ -7,6 +7,7 @@ import math
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen, QRadialGradient
 
+from . import __version__
 from .models import CodexSnapshot, StatusName
 
 
@@ -103,6 +104,9 @@ def render_screen(frame: ScreenFrame) -> QImage:
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         _text(painter, QRectF(32, 18, 112, 34), 'CODEX', 22, medium=True, center=False)
         _text(painter, QRectF(145, 18, 240, 34), '/ 状态与额度', 20, MUTED, center=False)
+        painter.drawText(QRectF(688, 18, 240, 34),
+                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         f'挂件版本号 {__version__}')
 
         two_columns = len(frame.quotas) == 1
         centers = (250, 710) if two_columns else (177, 492, 792)

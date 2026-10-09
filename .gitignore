@@ -34,3 +34,6 @@ nuitka-crash-report.xml
 # Windows files
 Thumbs.db
 Desktop.ini
+
+# 临时文件
+tmp/
