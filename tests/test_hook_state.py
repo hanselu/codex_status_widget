@@ -399,6 +399,40 @@ def test_ambiguous_internal_session_mapping_stays_working(tmp_path: Path) -> Non
     assert HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal().status == 'working'
 
 
+def test_background_shutdown_removes_only_finished_task(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    shutdown_at = now + timedelta(seconds=1)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('internal-memory', int(now.timestamp()), now.microsecond * 1000,
+                            'codex_core::session::turn',
+                            'turn{thread.id=internal-memory turn.id=t1 model=gpt-test}: sampling'))
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('internal-memory', int(shutdown_at.timestamp()),
+                            shutdown_at.microsecond * 1000, 'codex_core::session::handlers',
+                            'session_loop{thread_id=internal-memory}:'
+                            'submission_dispatch{codex.op="shutdown"}: Shutting down Codex instance'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='PreToolUse', cwd='C:/Users/Test/.codex/memories',
+            recorded_at=now.isoformat())
+    _append(events, hook_event_name='PostToolUse', recorded_at=now.isoformat())
+    _append(events, hook_event_name='PreToolUse', session_id='s2', turn_id='t2',
+            cwd='E:/Project/Active', recorded_at=now.isoformat())
+    reader = HookStateReader(events, sessions_dir=tmp_path / 'sessions')
+
+    signal = reader.read_signal()
+
+    assert signal.status == 'working'
+    assert signal.working_count == 1
+    assert signal.session_id == 's2'
+    assert 'memories' not in signal.detail
+
+    _append(events, hook_event_name='Stop', session_id='s2', turn_id='t2')
+    assert reader.read_signal().status == 'idle'
+
+
 def test_unreadable_diagnostic_database_does_not_break_hooks(tmp_path: Path) -> None:
     (tmp_path / 'logs_2.sqlite').write_text('invalid database', encoding='utf-8')
     events = tmp_path / 'events.jsonl'

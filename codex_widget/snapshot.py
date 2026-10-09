@@ -48,7 +48,7 @@ class CodexSnapshotReader:
         hook_setup_note = _visible_hook_setup_note(self._read_hook_setup_status())
 
         status = self._resolve_status(quota, hook_signal, now, codex_app_running)
-        app_note = 'ChatGPT App 未运行' if codex_app_running is False else ''
+        app_note = 'Codex 未运行' if status == 'offline' else ''
         hook_note = _visible_hook_note(hook_signal)
         hook_detail = _visible_hook_detail(hook_signal)
         notes = _split_notes([app_note, hook_setup_note, hook_note, quota.note])
@@ -101,9 +101,6 @@ class CodexSnapshotReader:
     def _resolve_status(  # noqa: ANN001
         self, quota, hook_signal: HookSignal, now: datetime, codex_app_running: bool | None
     ) -> StatusName:
-        if codex_app_running is False:
-            return 'offline'
-
         if (
             quota.has_limit_signal
             or quota_is_exhausted(quota.primary, now)
@@ -113,6 +110,8 @@ class CodexSnapshotReader:
 
         if hook_signal.status in {'waiting', 'working'}:
             return hook_signal.status
+        if codex_app_running is False:
+            return 'offline'
         if hook_signal.status == 'idle':
             return 'idle'
 

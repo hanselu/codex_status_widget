@@ -1,6 +1,6 @@
 # Codex 状态与额度小挂件
 
-Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Codex 的多状态指示灯和订阅额度文本。
+Windows 桌面小挂件，用 Python + PySide6 显示 Codex 的多状态指示灯和订阅额度文本，支持 ChatGPT 桌面应用、VS Code 插件和 CLI。
 
 这一版把“状态”和“额度”彻底分开：
 
@@ -21,9 +21,11 @@ Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Co
 | 蓝色 | 工作中 | 有活跃 turn，包括生成响应、工具执行或子任务运行 |
 | 橙色 | 待确认 | Hook 收到 `PermissionRequest`，或 transcript 中出现尚未完成的 `require_escalated` 工具调用 |
 | 红色 | 无额度 | 额度达到 100% 且重置时间仍在未来，或检测到明确 cooldown / quota / rate limit 错误 |
-| 红色 | 未运行 | ChatGPT App 进程未运行 |
+| 红色 | 未运行 | 未检测到 ChatGPT App 或 Codex 进程，且没有明确的活跃任务信号 |
 
 多对话同时运行时，主状态灯按优先级聚合：红色异常 > 待确认 > 工作中 > 闲置。小挂件正文只显示数量摘要，托盘和悬停提示显示具体对话明细。
+
+ChatGPT App 未启动时，VS Code 插件或 CLI 的 `codex.exe` 仍可作为运行信号；明确的工作或待确认信号优先于进程检测。挂件自己为查询额度启动的临时进程不计入客户端检测。
 
 托盘图标的外圈使用状态灯颜色，中央显示剩余额度的整数百分比：优先显示 5 小时额度，没有可用的 5 小时额度时显示周额度；两者都未读取到时显示 `--`。
 
@@ -34,6 +36,8 @@ Windows 桌面小挂件，用 Python + PySide6 显示 ChatGPT 桌面应用中 Co
 0.5.0 新增 GEM12 屏幕图片生成与后台推送。
 
 0.5.1 将屏幕控制改为使用 PyPI 的 `gem12-screen` 库，不再维护项目内的屏控代码副本。
+
+0.5.2 扩展客户端检测范围，支持 ChatGPT App、VS Code 插件和 CLI；明确的活跃任务信号优先于进程检测，挂件自身的额度查询进程不计入客户端检测。
 
 除“无额度”会触发红灯外，额度百分比不影响工作状态。
 
@@ -293,7 +297,7 @@ codex_status_widget/
 
 ## 设计取舍
 
-- 桌面应用检测精确识别 `ChatGPT.exe`，同时兼容旧版 `Codex.exe`；小写 `codex.exe` 是后台代理，不作为桌面应用。
+- 客户端检测识别 `ChatGPT.exe` 和 `codex.exe`（不区分大小写），兼容旧版 `Codex.exe`；不将挂件自身的额度查询进程、code-mode host 或 sandbox service 单独作为客户端运行依据。
 - Hook writer 不保存 prompt、tool input、tool output，只保存事件名、session id、turn id、cwd、model 等生命周期字段。
 - Hook writer 不输出 stdout，避免影响 Codex 上下文。
 - Hook writer 异常时返回 0，避免因为小挂件故障阻塞 Codex。

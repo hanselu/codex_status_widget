@@ -20,6 +20,7 @@ APP_SERVER_RELATIVE_PATHS = (
     Path('.codex') / '.sandbox-bin' / 'codex.exe',
 )
 PREFERRED_LIMIT_ID = 'codex'
+QUOTA_PROCESS_IDS: set[int] = set()
 
 
 class AppServerQuotaError(RuntimeError):
@@ -87,6 +88,9 @@ class _AppServerClient:
 
     def read_rate_limits(self) -> dict[str, Any]:
         process = self._start_process()
+        process_id = getattr(process, 'pid', None)
+        if process_id is not None:
+            QUOTA_PROCESS_IDS.add(process_id)
         output_queue: queue.Queue[str] = queue.Queue()
         stderr_queue: queue.Queue[str] = queue.Queue()
         stdout_thread = _start_reader_thread(process.stdout, output_queue)
@@ -109,6 +113,8 @@ class _AppServerClient:
         finally:
             _close_process(process)
             _join_threads((stdout_thread, stderr_thread))
+            if process_id is not None:
+                QUOTA_PROCESS_IDS.discard(process_id)
 
     def _start_process(self) -> Any:
         try:

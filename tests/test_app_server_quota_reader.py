@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from codex_widget import app_server_quota_reader
 from codex_widget.app_server_quota_reader import (
     AppServerQuotaError,
     AppServerQuotaReader,
@@ -92,6 +93,32 @@ def _reader_with_process(process: _FakeProcess, timeout_seconds: float = 0.2) ->
 
 def _sent_methods(process: _FakeProcess) -> list[str]:
     return [json.loads(line)['method'] for line in process.stdin.getvalue().splitlines()]
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_quota_process_is_excluded_from_client_detection_until_cleanup(monkeypatch, fails) -> None:
+    process = _FakeProcess([
+        _response(1, error={'code': 1, 'message': 'failed'} if fails else None),
+        _response(2), _response(3, _rate_limits_response()),
+    ])
+    process.pid = 123
+    process_ids = set()
+    monkeypatch.setattr(app_server_quota_reader, 'QUOTA_PROCESS_IDS', process_ids)
+    original_write = process.stdin.write
+
+    def write(value):
+        assert process_ids == {123}
+        return original_write(value)
+
+    process.stdin.write = write
+    if fails:
+        with pytest.raises(AppServerQuotaError):
+            _reader_with_process(process).read_quota()
+    else:
+        _reader_with_process(process).read_quota()
+
+    assert process_ids == set()
+    assert process.waited is True
 
 
 def test_discovers_plugin_app_server_before_sandbox_bin(tmp_path: Path) -> None:

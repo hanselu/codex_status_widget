@@ -1,6 +1,6 @@
 [project]
 name = "codex-status-widget"
-version = "0.5.1"
+version = "0.5.2"
 description = "Codex status and quota widget for the ChatGPT desktop app on Windows"
 requires-python = ">=3.12"
 dependencies = [

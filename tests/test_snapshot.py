@@ -623,6 +623,29 @@ def test_snapshot_shows_hook_setup_note_when_incomplete(tmp_path: Path) -> None:
     assert 'PostToolUse' in snapshot.detail
 
 
+def test_active_hook_takes_priority_over_missing_app_process(tmp_path: Path) -> None:
+    events = tmp_path / 'hook_events.jsonl'
+    for event_name, expected_status in (
+        ('UserPromptSubmit', 'working'),
+        ('PermissionRequest', 'waiting'),
+    ):
+        events.write_text(
+            json.dumps({
+                'recorded_at': datetime.now(timezone.utc).isoformat(),
+                'hook_event_name': event_name,
+                'session_id': 's1',
+                'turn_id': 't1',
+            }) + '\n',
+            encoding='utf-8',
+        )
+        snapshot = CodexSnapshotReader(
+            tmp_path / 'sessions', events, codex_app_running=lambda: False,
+        ).read_snapshot(quota=QuotaSnapshot())
+
+        assert snapshot.status == expected_status
+        assert '未运行' not in snapshot.note
+
+
 def test_codex_app_not_running_forces_red_status(tmp_path: Path) -> None:
     sessions = tmp_path / 'sessions'
     session = sessions / 'a.jsonl'
@@ -664,7 +687,7 @@ def test_codex_app_not_running_forces_red_status(tmp_path: Path) -> None:
     assert snapshot.status == 'offline'
     assert snapshot.status_text == '未运行'
     assert snapshot.codex_app_running is False
-    assert 'ChatGPT App 未运行' in snapshot.note
+    assert 'Codex 未运行' in snapshot.note
 
 
 def test_exhausted_quota_forces_red_status(tmp_path: Path) -> None:
