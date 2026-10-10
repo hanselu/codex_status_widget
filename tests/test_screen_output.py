@@ -79,6 +79,23 @@ def test_refresh_time_and_invisible_fraction_do_not_change_frame():
     assert frame_from_snapshot(original) == frame_from_snapshot(changed)
 
 
+@pytest.mark.parametrize('status', ['idle', 'working'])
+def test_screen_shows_background_memory_separately(status):
+    value = snapshot(status=status)
+    value.hook_signal = HookSignal(status=status, working_count=int(status == 'working'),
+                                   background_count=1)
+
+    frame = frame_from_snapshot(value)
+
+    assert frame.status == status
+    assert '后台正在整理记忆' in frame.summary
+    if status == 'idle':
+        assert frame.summary == '后台正在整理记忆'
+    else:
+        assert frame.summary == '工作 1 · 待确认 0\n后台正在整理记忆'
+    assert not render_screen(frame).isNull()
+
+
 class FakeScreen:
     port = 'COM_TEST'
 

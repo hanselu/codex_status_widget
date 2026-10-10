@@ -78,6 +78,11 @@ def frame_from_snapshot(snapshot: CodexSnapshot) -> ScreenFrame:
         summary = '桌面应用未运行'
     elif snapshot.status == 'cooldown':
         summary = '额度受限，等待恢复'
+    if hook.background_count:
+        if snapshot.status == 'idle':
+            summary = hook.background_summary
+        else:
+            summary += '\n' + hook.background_summary
     return ScreenFrame(snapshot.status, snapshot.status_text, summary, tuple(quotas))
 
 
@@ -138,7 +143,8 @@ def render_screen(frame: ScreenFrame) -> QImage:
         painter.drawEllipse(QRectF(left, 208, dot_size, dot_size))
         _text(painter, QRectF(left + dot_size + gap, 167, width + 2, 98),
               frame.status_text, font.pixelSize(), medium=True)
-        _text(painter, QRectF(cx - 150, 312, 300, 36), frame.summary, 21, MUTED)
+        summary_rect = QRectF(cx - 150, 296, 300, 64) if '\n' in frame.summary else QRectF(cx - 150, 312, 300, 36)
+        _text(painter, summary_rect, frame.summary, 21, MUTED)
 
         for cx, quota in zip(centers[1:], frame.quotas):
             _text(painter, QRectF(cx - 140, 71, 280, 36), quota.title, 25, MUTED)

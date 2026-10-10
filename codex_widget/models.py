@@ -47,7 +47,16 @@ class HookSignal:
     detail: str = ''
     working_count: int = 0
     waiting_count: int = 0
+    background_count: int = 0
+    background_turn_ids: frozenset[str] = field(default_factory=frozenset)
     events_path: Path | None = None
+
+    @property
+    def background_summary(self) -> str:
+        if not self.background_count:
+            return ''
+        suffix = f' × {self.background_count}' if self.background_count > 1 else ''
+        return '后台正在整理记忆' + suffix
 
 
 @dataclass(slots=True)

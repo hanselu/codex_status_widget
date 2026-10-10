@@ -59,6 +59,7 @@ class _SessionState:
     transcript_path: str = ''
     tool_name: str = ''
     note: str = ''
+    is_background: bool = False
 
 
 class HookStateReader:
@@ -73,6 +74,7 @@ class HookStateReader:
         self.stale_after_minutes = stale_after_minutes
         self.max_events_to_read = max_events_to_read
         self.sessions_dir = Path(sessions_dir).expanduser() if sessions_dir is not None else None
+        self._background_classification: dict[tuple[str, str], bool] = {}
 
     def read_signal(self) -> HookSignal:
         events = self._read_events()
@@ -102,7 +104,7 @@ class HookStateReader:
 
         now = datetime.now(timezone.utc)
         self._apply_transcript_completion(sessions)
-        self._apply_logged_shutdown(sessions, now)
+        self._apply_logged_state(sessions, now)
 
         stale_cutoff = now - timedelta(minutes=self.stale_after_minutes)
 
@@ -276,24 +278,29 @@ class HookStateReader:
             state.last_event_at = completed_at
             state.note = 'transcript 已记录结束，视为闲置'
 
-    def _apply_logged_shutdown(self, sessions: dict[str, _SessionState], now: datetime) -> None:
+    def _apply_logged_state(self, sessions: dict[str, _SessionState], now: datetime) -> None:
         # Transient Codex sessions may omit both rollout paths and Stop hooks.
         # An explicit core shutdown is stronger evidence than an inactivity timer.
-        if self.sessions_dir is None:
-            return
-        database = self.sessions_dir.parent / 'logs_2.sqlite'
-        if not database.is_file():
-            return
         cutoff = now - timedelta(minutes=self.stale_after_minutes)
         active = {
             key: state for key, state in sessions.items()
             if state.status in ACTIVE_STATUSES and state.last_event_at is not None
             and state.last_event_at >= cutoff and key != '__global__'
         }
-        if not active:
+        active_turns = {(state.session_id, state.turn_id) for state in active.values()}
+        self._background_classification = {
+            key: value for key, value in self._background_classification.items() if key in active_turns
+        }
+        for state in active.values():
+            state.is_background = self._background_classification.get((state.session_id, state.turn_id), False)
+        if not active or self.sessions_dir is None:
+            return
+        database = self.sessions_dir.parent / 'logs_2.sqlite'
+        if not database.is_file():
             return
         try:
             with closing(sqlite3.connect(database.absolute().as_uri() + '?mode=ro', uri=True, timeout=0.1)) as connection:
+                self._classify_background_tasks(connection, active)
                 shutdown_query = (
                     'SELECT ts, ts_nanos FROM logs WHERE thread_id = ? AND ts >= ? '
                     'AND target = ? AND feedback_log_body LIKE ? '
@@ -331,6 +338,30 @@ class HookStateReader:
             # Missing/changed diagnostics must not interrupt the hook reader.
             return
 
+    def _classify_background_tasks(
+        self, connection: sqlite3.Connection, active: dict[str, _SessionState],
+    ) -> None:
+        for state in active.values():
+            key = (state.session_id, state.turn_id)
+            if not state.turn_id or key in self._background_classification:
+                continue
+            # Match the submission's own metadata, not its prompt or cwd. Hooks
+            # and core logs can use different session IDs for the same turn.
+            rows = connection.execute(
+                'SELECT DISTINCT thread_id, instr(feedback_log_body, ?) > 0 FROM logs '
+                'WHERE target = ? AND thread_id IS NOT NULL '
+                'AND instr(feedback_log_body, ?) > 0 LIMIT 2',
+                ('start: TurnStartOptions { turn_trigger: Some("memory_consolidation"),',
+                 'codex_core::session::handlers',
+                 f': Submission sub=Submission {{ id: "{state.turn_id}", op: TurnInput {{'),
+            ).fetchall()
+            if len(rows) != 1:
+                continue
+            state.is_background = bool(rows[0][1])
+            # Startup metadata is immutable. Cache confirmed classifications per
+            # turn; missing/ambiguous records are retried on the next refresh.
+            self._background_classification[key] = state.is_background
+
 
 def _signal_from_state(
     status: HookSignalName, state: _SessionState, note_prefix: str, events_path: Path
@@ -357,11 +388,13 @@ def _state_key(event: dict[str, Any]) -> str:
 
 
 def _signal_from_active_states(active_states: list[_SessionState], events_path: Path) -> HookSignal:
-    counts = _active_counts(active_states)
+    user_states = [state for state in active_states if not state.is_background]
+    background_states = [state for state in active_states if state.is_background]
+    counts = _active_counts(user_states)
     status = _aggregate_status(counts)
-    states_for_status = [state for state in active_states if state.status == status]
+    states_for_status = [state for state in user_states if state.status == status] or background_states
     state = max(states_for_status, key=lambda item: item.last_event_at or datetime.min.replace(tzinfo=timezone.utc))
-    return HookSignal(
+    signal = HookSignal(
         status=status,
         last_event_name=state.last_event_name,
         last_event_at=state.last_event_at,
@@ -370,11 +403,37 @@ def _signal_from_active_states(active_states: list[_SessionState], events_path: 
         cwd=state.cwd,
         model=state.model,
         note=_format_active_summary(counts),
-        detail=_format_active_detail(active_states),
+        detail=_format_active_detail(user_states),
         working_count=counts['working'],
         waiting_count=counts['waiting'],
+        background_count=len(background_states),
+        background_turn_ids=frozenset(state.turn_id for state in background_states),
         events_path=events_path,
     )
+    if background_states:
+        signal.note = ' · '.join(part for part in (signal.note, signal.background_summary) if part)
+        signal.detail = '\n\n'.join(
+            part for part in (signal.detail, _format_background_detail(background_states)) if part
+        )
+    return signal
+
+
+def _format_background_detail(states: list[_SessionState]) -> str:
+    labels = {
+        'UserPromptSubmit': '开始整理',
+        'PreToolUse': '工具调用前',
+        'PostToolUse': '调用已结束',
+        'PermissionRequest': '待确认',
+        'SubagentStart': '子任务开始',
+        'SubagentStop': '子任务结束',
+    }
+    lines = ['后台记忆整理']
+    for state in sorted(states, key=lambda item: item.last_event_at, reverse=True):
+        parts = [f'最近活动：{state.last_event_at.astimezone():%H:%M:%S}']
+        activity = labels.get(state.last_event_name, '活动更新')
+        parts.append(f'{state.tool_name}（{activity}）' if state.tool_name else activity)
+        lines.append('- ' + ' · '.join(parts))
+    return '\n'.join(lines)
 
 
 def _active_counts(states: list[_SessionState]) -> dict[str, int]:

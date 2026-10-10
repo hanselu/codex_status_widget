@@ -110,6 +110,8 @@ class CodexSnapshotReader:
 
         if hook_signal.status in {'waiting', 'working'}:
             return hook_signal.status
+        if hook_signal.background_count:
+            return 'idle'
         if codex_app_running is False:
             return 'offline'
         if hook_signal.status == 'idle':
@@ -198,13 +200,13 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
 
 
 def _visible_hook_note(hook_signal: HookSignal) -> str:
-    if hook_signal.status == 'idle':
+    if hook_signal.status == 'idle' and not hook_signal.background_count:
         return ''
     return hook_signal.note
 
 
 def _visible_hook_detail(hook_signal: HookSignal) -> str:
-    if hook_signal.status == 'idle':
+    if hook_signal.status == 'idle' and not hook_signal.background_count:
         return ''
     return hook_signal.detail or hook_signal.note
 
@@ -227,6 +229,7 @@ def _visible_hook_setup_note(status: HookSetupStatus | None) -> str:
 
 
 def _merge_pending_approvals(hook_signal: HookSignal, approvals: list[PendingApproval]) -> HookSignal:
+    approvals = [approval for approval in approvals if approval.turn_id not in hook_signal.background_turn_ids]
     if not approvals or hook_signal.status == 'waiting':
         return hook_signal
 
@@ -238,6 +241,8 @@ def _merge_pending_approvals(hook_signal: HookSignal, approvals: list[PendingApp
     parts = [f'待确认 × {len(approvals)}']
     if working_count:
         parts.append(f'工作 × {working_count}')
+    if hook_signal.background_summary:
+        parts.append(hook_signal.background_summary)
 
     detail_parts = [_format_pending_approval_detail(approvals)]
     if hook_signal.detail:
@@ -257,6 +262,8 @@ def _merge_pending_approvals(hook_signal: HookSignal, approvals: list[PendingApp
         detail='\n\n'.join(part for part in detail_parts if part),
         working_count=working_count,
         waiting_count=len(approvals),
+        background_count=hook_signal.background_count,
+        background_turn_ids=hook_signal.background_turn_ids,
         events_path=hook_signal.events_path,
     )
 

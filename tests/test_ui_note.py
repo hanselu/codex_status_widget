@@ -206,6 +206,38 @@ def test_resize_excludes_explicitly_hidden_note_before_first_show() -> None:
     assert app is not None
 
 
+def test_idle_background_hint_is_visible_and_clears_on_completion() -> None:
+    app = QApplication.instance() or QApplication([])
+    widget = QWidget()
+    widget.setFixedSize(220, 132)
+    CodexWidget._build_ui(widget)
+    widget._max_available_height = lambda: 600
+    widget._keep_inside_screen = lambda: None
+    widget._resize_to_content = lambda: CodexWidget._resize_to_content(widget)
+    widget._set_tray_icon = lambda status: None
+    widget.tray = _TrayStub()
+    value = _snapshot(primary_title='周额度', primary=QuotaWindow(),
+                      primary_text='周额度：未读取 未知', primary_visible=True)
+    value.note = '后台正在整理记忆'
+    value.detail = '后台记忆整理\n- 最近活动：00:23:30 · Bash（调用已结束）'
+    value.hook_signal = HookSignal(status='idle', background_count=1)
+
+    CodexWidget._apply_snapshot(widget, value)
+    assert widget.title_label.text() == '闲置中'
+    assert '#31c46b' in widget.status_dot.styleSheet()
+    assert widget.note_label.isHidden() is False
+    assert widget.note_label.text() == '后台正在整理记忆'
+    assert value.detail in widget.tray.tooltip
+
+    value.note = value.detail = ''
+    value.hook_signal = HookSignal(status='idle')
+    CodexWidget._apply_snapshot(widget, value)
+    assert widget.note_label.isHidden() is True
+    assert '后台' not in widget.tray.tooltip
+    widget.close()
+    assert app is not None
+
+
 def test_apply_snapshot_switches_quota_rows_between_single_and_double() -> None:
     app = QApplication.instance() or QApplication([])
     widget = QWidget()
