@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+import logging
 import time
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, QUrl
@@ -34,6 +35,7 @@ from .reset_credits import (
 )
 from .snapshot import CodexSnapshotReader
 from .screen_output import ScreenOutput
+from .status_json import save_status_json
 
 
 STATUS_COLORS: dict[StatusName, str] = {
@@ -291,6 +293,10 @@ class CodexWidget(QWidget):
         snapshot = self.reader.read_snapshot(quota=self._quota)
         self._last_snapshot = snapshot
         self._apply_snapshot(snapshot)
+        try:
+            save_status_json(snapshot, CONFIG_DIR / 'status.json')
+        except OSError as exc:
+            logging.getLogger(__name__).warning('状态 JSON 导出失败：%s', exc)
         if self._screen_output is not None:
             self._screen_output.update(snapshot)
             self.screen_status_action.setText(self._screen_output.status_text)

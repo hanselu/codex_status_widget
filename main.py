@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from codex_widget.codex_app import codex_app_is_running
@@ -68,6 +69,20 @@ def screen_once() -> int:
     return 0
 
 
+def json_once() -> int:
+    from codex_widget.config import CONFIG_DIR
+    from codex_widget.status_json import save_status_json
+
+    snapshot = read_snapshot(AppConfig.load())
+    try:
+        payload = save_status_json(snapshot, CONFIG_DIR / 'status.json')
+    except OSError as exc:
+        print(f'JSON 导出失败：{exc}', file=sys.stderr)
+        return 1
+    print(json.dumps(payload, indent=2, allow_nan=False))
+    return 0
+
+
 def install_hook() -> int:
     writer_path, hooks_path, backup_path = install_hooks()
     print(f'已安装 hook writer：{writer_path}')
@@ -89,6 +104,7 @@ def uninstall_hook() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description='Codex 状态与额度桌面小挂件')
     parser.add_argument('--once', action='store_true', help='只在控制台读取并打印一次，不启动窗口')
+    parser.add_argument('--json-once', action='store_true', help='读取一次状态与额度，写入 status.json 并打印 JSON，不启动窗口')
     parser.add_argument('--screen-once', action='store_true', help='读取一次真实状态，生成图片并推送至 GEM12 屏幕')
     parser.add_argument('--install-hook', action='store_true', help='安装/刷新 Codex hook 配置')
     parser.add_argument('--uninstall-hook', action='store_true', help='从 hooks.json 移除本工具的 hook')
@@ -100,6 +116,8 @@ def main() -> int:
         return uninstall_hook()
     if args.once:
         return print_once()
+    if args.json_once:
+        return json_once()
     if args.screen_once:
         return screen_once()
 

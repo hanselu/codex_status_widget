@@ -101,6 +101,93 @@ port = ""
 
 `port` 留空表示自动识别；检测到多个目标设备时，可以填写其中一个目标串口。
 
+## 对外 JSON 状态文件
+
+完整字段、类型、空值约定和读取示例见 [JSON 状态输出接口说明](docs/JSON状态输出接口说明.md)。
+
+启动新版挂件后，每次状态刷新都会自动更新：
+
+```text
+%USERPROFILE%\.codex_widget\status.json
+```
+
+外部程序直接读取这个 UTF-8 JSON 文件即可。文件采用完整写入后替换的方式保存，
+不会先清空旧文件；写入失败会保留上一份数据，下一次刷新继续尝试。
+JSON 导出复用挂件当前的状态与额度快照，状态约每 2～3 秒更新，额度仍在后台至少每 60 秒查询一次。
+此接口只提供数据，外部墨水屏图片的生成与推送由读取方负责。
+
+也可以不启动挂件，只读取并导出一次，同时在标准输出打印同一份 JSON：
+
+```powershell
+uv run python main.py --json-once
+```
+
+标准输出使用 JSON Unicode 转义以兼容 Windows 控制台编码，文件保留 UTF-8 中文，解析后数据相同。
+保存失败时命令返回非零退出码，错误写到标准错误。不要与持续运行的挂件同时执行单次导出，
+以免两份快照交替覆盖同一个文件。已运行的旧版 EXE 不会自动获得新功能，需重新打包并启动新版。
+
+示例（时间、数量和额度均为示例值）：
+
+```json
+{
+  "schema_version": 1,
+  "updated_at": "2026-10-11T12:00:00+08:00",
+  "status": "working",
+  "status_text": "工作中",
+  "codex_app_running": true,
+  "tasks": {
+    "working_count": 2,
+    "waiting_count": 0,
+    "background_count": 0
+  },
+  "note": "工作 × 2",
+  "detail": "工作中\n- 示例项目",
+  "last_event": {
+    "name": "PreToolUse",
+    "at": "2026-10-11T11:59:59+08:00",
+    "session_id": "example-session",
+    "turn_id": "example-turn",
+    "cwd": "D:/Project/Example",
+    "model": ""
+  },
+  "quotas": [
+    {
+      "title": "5小时",
+      "window_minutes": 300,
+      "used_percent": 25.0,
+      "remaining_percent": 75.0,
+      "resets_at": "2026-10-11T16:00:00+08:00"
+    },
+    {
+      "title": "周额度",
+      "window_minutes": 10080,
+      "used_percent": null,
+      "remaining_percent": null,
+      "resets_at": null
+    }
+  ]
+}
+```
+
+字段约定：
+
+- `schema_version`：当前为 `1`。
+- `updated_at`：本次导出时间，ISO 8601 格式且含时区。它不是额度的查询时间。
+  挂件退出后保留最后一份文件，读取方可根据这个时间判断数据是否过期，不能仅凭文件存在判断挂件正在运行。
+- `status`：`idle` 闲置、`working` 工作中、`waiting` 待确认、`cooldown` 无额度、`offline` 未运行。
+  `status_text` 是对应的中文显示文字，优先级沿用挂件现有规则。
+- `codex_app_running`：客户端进程检测结果；未知为 `null`，有活跃任务时总状态仍以任务信号为准。
+- `tasks`：已识别的工作、待确认及后台记忆整理数量。仅使用日志时间回退判断工作中时，
+  可能显示 `working` 而数量为 `0`，表示没有从 Hook 确认任务数量。
+- `note` / `detail`：挂件的摘要和详情文字，没有内容时为空字符串。
+- `last_event`：现有状态读取器选出的代表事件；多任务时优先代表待确认或工作任务，
+  不保证是所有会话中时间最晚的事件。缺失的文字字段为空字符串，缺失的时间为 `null`。
+- `quotas`：挂件当前显示的额度窗口列表，仅有周额度时只有一个窗口；窗口类型看 `window_minutes`，
+  不根据数组位置猜测。未知数值或重置时间为 `null`，剩余 `0` 表示确实耗尽。
+  `used_percent` 和 `remaining_percent` 都是 0～100 范围内的百分比值。
+
+首版不输出未采集的任务名称、分析/编写/检查阶段或累计运行时长，也不读取提示词和工具输入输出。
+
 ## 安装 Codex Hook
 
 ```powershell

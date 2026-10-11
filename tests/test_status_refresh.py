@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from threading import Event
+import json
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -21,6 +22,7 @@ def widget_factory(tmp_path, monkeypatch):
     reader = CodexSnapshotReader(config.codex.sessions_dir, config.hook.events_path)
     reader.hook_reader.read_signal = lambda: HookSignal(status='working')
     monkeypatch.setattr('codex_widget.ui.CodexSnapshotReader', lambda **kwargs: reader)
+    monkeypatch.setattr('codex_widget.ui.CONFIG_DIR', tmp_path)
     monkeypatch.setattr(CodexWidget, '_build_tray', lambda self: None)
     monkeypatch.setattr(CodexWidget, '_apply_snapshot', lambda self, snapshot: None)
     widgets = []
@@ -145,3 +147,46 @@ def test_screen_toggle_persists_and_releases_output(widget_factory, monkeypatch)
     assert saves == [True, False]
     assert outputs[0].closed
     assert widget._screen_output is None
+
+
+def test_json_file_follows_live_status_and_cached_quota(widget_factory, tmp_path):
+    widget, reader = widget_factory(lambda: QuotaSnapshot())
+    path = tmp_path / 'status.json'
+    assert json.loads(path.read_text(encoding='utf-8'))['status'] == 'working'
+
+    widget._quota_future.result(timeout=2)
+    widget._refresh_status()
+    widget._quota = QuotaSnapshot(primary=QuotaWindow(used_percent=40, window_minutes=300))
+    reader.hook_reader.read_signal = lambda: HookSignal(status='waiting', waiting_count=1)
+    widget._refresh_status()
+    payload = json.loads(path.read_text(encoding='utf-8'))
+
+    assert payload['status'] == widget._last_snapshot.status == 'waiting'
+    assert payload['tasks']['waiting_count'] == 1
+    assert payload['quotas'][0]['remaining_percent'] == 60
+
+
+def test_json_write_failure_does_not_block_status_or_screen(widget_factory, monkeypatch, caplog):
+    widget, reader = widget_factory(lambda: QuotaSnapshot())
+    received = []
+
+    class Output:
+        status_text = '屏幕：测试已推送'
+
+        def update(self, snapshot):
+            received.append(snapshot)
+
+        def close(self):
+            pass
+
+    def fail_save(*args):
+        raise OSError('simulated write error')
+
+    widget._screen_output = Output()
+    monkeypatch.setattr('codex_widget.ui.save_status_json', fail_save)
+    reader.hook_reader.read_signal = lambda: HookSignal(status='idle')
+    widget._refresh_status()
+
+    assert widget._last_snapshot.status == 'idle'
+    assert received[-1] is widget._last_snapshot
+    assert '状态 JSON 导出失败' in caplog.text
