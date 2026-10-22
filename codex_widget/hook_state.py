@@ -307,6 +307,34 @@ class HookStateReader:
                     'ORDER BY ts DESC, ts_nanos DESC LIMIT 1'
                 )
                 for session_id, state in active.items():
+                    # Ephemeral turns can finish without a rollout, Stop hook,
+                    # or session shutdown. Only the latest sample for this exact
+                    # session/turn can establish that no further work remains.
+                    if state.status == 'working' and not state.transcript_path and state.turn_id:
+                        marker = f': post sampling token usage turn_id={state.turn_id} '
+                        sample = connection.execute(
+                            'SELECT ts, ts_nanos, feedback_log_body FROM logs '
+                            'WHERE thread_id = ? AND ts >= ? AND target = ? '
+                            'AND instr(feedback_log_body, ?) > 0 '
+                            'ORDER BY ts DESC, ts_nanos DESC LIMIT 1',
+                            (session_id, int(state.last_event_at.timestamp()),
+                             'codex_core::session::turn', marker),
+                        ).fetchone()
+                        if sample is not None:
+                            fields = set(sample[2].rsplit(marker, 1)[1].split())
+                            finished_fields = {
+                                'model_needs_follow_up=false',
+                                'has_pending_input=false',
+                                'needs_follow_up=false',
+                            }
+                            completed_at = _datetime_from_unix_seconds(sample[0] + sample[1] / 1_000_000_000)
+                            if (finished_fields <= fields and completed_at is not None
+                                    and completed_at >= state.last_event_at):
+                                state.status = 'idle'
+                                state.last_event_name = 'TaskComplete'
+                                state.last_event_at = completed_at
+                                state.note = 'Codex 日志已记录本轮无后续工作，视为闲置'
+                                continue
                     shutdown_params = (
                         int(state.last_event_at.timestamp()),
                         'codex_core::session::handlers', '%: Shutting down Codex instance',

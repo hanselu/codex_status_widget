@@ -440,6 +440,113 @@ def test_unreadable_diagnostic_database_does_not_break_hooks(tmp_path: Path) -> 
     assert HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal().status == 'working'
 
 
+@pytest.mark.parametrize(
+    ('session_id', 'turn_id', 'flags', 'offset', 'expected_status'),
+    [
+        ('s1', 't1', 'model_needs_follow_up=false has_pending_input=false needs_follow_up=false', 1, 'idle'),
+        ('other', 't1', 'model_needs_follow_up=false has_pending_input=false needs_follow_up=false', 1, 'working'),
+        ('s1', 't1-suffix', 'model_needs_follow_up=false has_pending_input=false needs_follow_up=false', 1, 'working'),
+        ('s1', 't1', 'model_needs_follow_up=false has_pending_input=false needs_follow_up=false', -0.1, 'working'),
+        ('s1', 't1', 'model_needs_follow_up=true has_pending_input=false needs_follow_up=false', 1, 'working'),
+        ('s1', 't1', 'model_needs_follow_up=false has_pending_input=true needs_follow_up=false', 1, 'working'),
+        ('s1', 't1', 'model_needs_follow_up=false has_pending_input=false needs_follow_up=true', 1, 'working'),
+        ('s1', 't1', 'model_needs_follow_up=false has_pending_input=false', 1, 'working'),
+        ('s1', 't1', 'model_needs_follow_up=false has_pending_input=false needs_follow_up=false-extra', 1, 'working'),
+    ],
+)
+def test_transcriptless_sampling_completion_requires_exact_evidence(
+    tmp_path: Path, session_id: str, turn_id: str, flags: str, offset: float, expected_status: str,
+) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=500000)
+    completed_at = now + timedelta(seconds=offset)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           (session_id, int(completed_at.timestamp()), completed_at.microsecond * 1000,
+                            'codex_core::session::turn',
+                            f'session_task.run:run_turn: post sampling token usage turn_id={turn_id} '
+                            f'total_usage_tokens=100 {flags}'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit', recorded_at=now.isoformat())
+    reader = HookStateReader(events, sessions_dir=tmp_path / 'sessions')
+
+    signal = reader.read_signal()
+
+    assert signal.status == expected_status
+    if expected_status == 'idle':
+        assert signal.last_event_name == 'TaskComplete'
+        assert signal.last_event_at == completed_at
+
+    _append(events, hook_event_name='UserPromptSubmit', turn_id='t2',
+            recorded_at=(now + timedelta(seconds=2)).isoformat())
+    assert reader.read_signal().status == 'working'
+
+
+@pytest.mark.parametrize('later_flags', [
+    'model_needs_follow_up=true has_pending_input=false needs_follow_up=true',
+    'total_usage_tokens=200',
+])
+def test_sampling_completion_uses_latest_sample(tmp_path: Path, later_flags: str) -> None:
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        for nanos, flags in enumerate([
+            'model_needs_follow_up=false has_pending_input=false needs_follow_up=false', later_flags,
+        ]):
+            connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                               ('s1', int(now.timestamp()) + 1, nanos,
+                                'codex_core::session::turn',
+                                f'run_turn: post sampling token usage turn_id=t1 {flags}'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit', recorded_at=now.isoformat())
+
+    assert HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal().status == 'working'
+
+
+@pytest.mark.parametrize('event_name', ['PreToolUse', 'PermissionRequest'])
+def test_activity_after_sampling_completion_remains_active(tmp_path: Path, event_name: str) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=100000)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('s1', int(now.timestamp()), now.microsecond * 1000,
+                            'codex_core::session::turn',
+                            'run_turn: post sampling token usage turn_id=t1 '
+                            'model_needs_follow_up=false has_pending_input=false needs_follow_up=false'))
+    events = tmp_path / 'events.jsonl'
+    _append(events, hook_event_name='UserPromptSubmit', recorded_at=(now - timedelta(seconds=1)).isoformat())
+    _append(events, hook_event_name=event_name, recorded_at=(now + timedelta(microseconds=1)).isoformat())
+
+    signal = HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal()
+
+    assert signal.status == ('waiting' if event_name == 'PermissionRequest' else 'working')
+
+
+@pytest.mark.parametrize('guard', ['transcript', 'waiting', 'other_target'])
+def test_sampling_fallback_preserves_authoritative_activity(tmp_path: Path, guard: str) -> None:
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(tmp_path / 'logs_2.sqlite') as connection:
+        connection.execute('CREATE TABLE logs (thread_id TEXT, ts INTEGER, ts_nanos INTEGER, '
+                           'target TEXT, feedback_log_body TEXT)')
+        connection.execute('INSERT INTO logs VALUES (?, ?, ?, ?, ?)',
+                           ('s1', int(now.timestamp()) + 1, 0,
+                            'other' if guard == 'other_target' else 'codex_core::session::turn',
+                            'run_turn: post sampling token usage turn_id=t1 '
+                            'model_needs_follow_up=false has_pending_input=false needs_follow_up=false'))
+    events = tmp_path / 'events.jsonl'
+    transcript = tmp_path / 'rollout.jsonl'
+    transcript.write_text('', encoding='utf-8')
+    _append(events, hook_event_name='PermissionRequest' if guard == 'waiting' else 'UserPromptSubmit',
+            recorded_at=now.isoformat(), transcript_path=str(transcript) if guard == 'transcript' else '')
+
+    signal = HookStateReader(events, sessions_dir=tmp_path / 'sessions').read_signal()
+
+    assert signal.status == ('waiting' if guard == 'waiting' else 'working')
+
+
 def test_manual_idle_forces_idle(tmp_path: Path) -> None:
     events = tmp_path / 'hook_events.jsonl'
     _append(events, hook_event_name='UserPromptSubmit')
